@@ -1,8 +1,14 @@
 #include <HalStorage.h>
 #include <Serialization.h>
 #include <gtest/gtest.h>
+#include <chrono>
 #include <filesystem>
 #include <string>
+#ifdef _WIN32
+#include <process.h>
+#else
+#include <unistd.h>
+#endif
 #define LOG_ERR(...) ((void)0)
 @SECTION_VERSIONS@
 struct ReaderRenderSpec {};
@@ -23,10 +29,36 @@ struct Section {
 class SectionSoftFlush : public testing::Test {
  protected:
   Section section;
+  std::filesystem::path tempDirectory;
+  bool ownsTempDirectory = false;
   void SetUp() override {
-    section.filePath = (std::filesystem::temp_directory_path() / "crosspoint-soft-flush-section.bin").string();
+#ifdef _WIN32
+    const auto processId = _getpid();
+#else
+    const auto processId = getpid();
+#endif
+    const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
+    const auto* test = testing::UnitTest::GetInstance()->current_test_info();
+    tempDirectory = std::filesystem::temp_directory_path() /
+                    ("crosspoint-soft-flush-" + std::to_string(processId) + "-" + std::to_string(stamp) + "-" +
+                     test->name());
+    // Atomic creation establishes ownership; never use or clean up an existing directory.
+    std::error_code error;
+    ownsTempDirectory = std::filesystem::create_directory(tempDirectory, error);
+    ASSERT_TRUE(ownsTempDirectory) << tempDirectory << ": " << error.message();
+    section.filePath = (tempDirectory / "section.bin").string();
   }
-  void TearDown() override { section.file.close(); std::filesystem::remove(section.filePath); }
+  void TearDown() override {
+    section.file.close();
+    if (!ownsTempDirectory) return;
+    std::error_code error;
+    std::filesystem::remove(section.filePath, error);
+    EXPECT_FALSE(error) << error.message();
+    // Remove only our file and the now-empty directory, never recursively delete other files.
+    const bool removed = std::filesystem::remove(tempDirectory, error);
+    EXPECT_FALSE(error) << error.message();
+    EXPECT_TRUE(removed) << tempDirectory;
+  }
   void write(uint8_t version) {
     HalFile file;
     ASSERT_TRUE(file.open(section.filePath.c_str(), "wb"));
