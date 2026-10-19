@@ -416,3 +416,47 @@ TEST(SdCardFontTest, WarmMeasureAndLigaturesMatchColdAndSurviveScopeReset) {
   ASSERT_EQ(0, font.prewarm("ABCDEF", 1, false, true, false));
   EXPECT_EQ(coldWidth, width());
 }
+
+TEST(SdCardFontTest, RepeatedResidentReleaseKeepsCoverageAndReloadsHangulBitmapsAndAdvances) {
+  makeFont();
+  SdCardFont font;
+  ASSERT_TRUE(font.load("fixture"));
+  const auto text = page(FIRST, 5);
+  for (int cycle = 0; cycle < 3; ++cycle) {
+    ASSERT_EQ(0, font.prewarm(text.c_str(), 1, false, false, false));
+    expectPageBitmaps(font, FIRST, 5);
+    ASSERT_EQ(0, font.buildAdvanceTable(text.c_str(), 1));
+    ASSERT_TRUE(font.hasAdvanceTable());
+    font.releaseResidentCaches();
+    font.releaseResidentCaches();
+    EXPECT_FALSE(font.hasAdvanceTable());
+    EXPECT_EQ(nullptr, font.getEpdFont()->data->bitmap);
+    EXPECT_TRUE(font.getEpdFont()->hasCodepoint(FIRST));
+    EXPECT_TRUE(font.getEpdFont()->hasCodepoint(FIRST + 511));
+  }
+  const size_t reads = sdFontTestReads;
+  ASSERT_EQ(0, font.prewarm(text.c_str(), 1, false, false, false));
+  EXPECT_GT(sdFontTestReads, reads);
+  expectPageBitmaps(font, FIRST, 5);
+}
+
+TEST(SdCardFontTest, RepeatedResidentReleaseRestoresKerningLigaturesAndDimensions) {
+  makeKerningFont(0, 2, 2, true);
+  SdCardFont font;
+  ASSERT_TRUE(font.load("fixture"));
+  ASSERT_EQ(0, font.prewarm("ABCDEF", 1, false, true, false));
+  int width = 0, height = 0;
+  font.getEpdFont()->getTextDimensions("ABCDEF", &width, &height);
+  for (int cycle = 0; cycle < 3; ++cycle) {
+    font.releaseResidentCaches();
+    EXPECT_EQ(nullptr, font.getEpdFont()->data->ligaturePairs);
+    ASSERT_EQ(0, font.prewarm("ABCDEF", 1, false, true, false));
+    EXPECT_EQ(-3, font.getEpdFont()->getKerning('A', 'B'));
+    EXPECT_EQ(-5, font.getEpdFont()->getKerning('C', 'D'));
+    EXPECT_EQ(static_cast<uint32_t>('A'), font.getEpdFont()->getLigature('E', 'F'));
+    int restoredWidth = 0, restoredHeight = 0;
+    font.getEpdFont()->getTextDimensions("ABCDEF", &restoredWidth, &restoredHeight);
+    EXPECT_EQ(width, restoredWidth);
+    EXPECT_EQ(height, restoredHeight);
+  }
+}

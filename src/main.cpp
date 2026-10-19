@@ -192,7 +192,11 @@ bleturner::Heap heap() {
 bool releaseCaches() {
   RenderLock lock(RenderLock::Mode::Try);
   if (!lock.ownsLock()) return false;
+  const auto before = HalMemory::getInternalHeap();
   fontCacheManager.releaseSdFontCaches();
+  const auto after = HalMemory::getInternalHeap();
+  LOG_INF("BLE", "Font caches released: free=%zu->%zu largest=%zu->%zu", before.freeBytes, after.freeBytes,
+          before.largestBlockBytes, after.largestBlockBytes);
   return true;
 }
 
