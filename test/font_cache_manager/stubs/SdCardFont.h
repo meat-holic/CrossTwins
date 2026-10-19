@@ -11,8 +11,8 @@ class SdCardFont {
     bool accumulate = true;
   };
 
-  void clearCache() {}
-  void releaseResidentCaches() {}
+  void clearCache() { ++clearCalls; }
+  void releaseResidentCaches() { ++releaseCalls; }
   int prewarm(const char* text, uint8_t styleMask, bool, bool, bool accumulate) {
     auto& call = prewarmCalls[prewarmCallCount++];
     std::snprintf(call.text, sizeof(call.text), "%s", text);
@@ -26,5 +26,7 @@ class SdCardFont {
 
   PrewarmCall prewarmCalls[4] = {};
   int prewarmCallCount = 0;
+  int clearCalls = 0;
+  int releaseCalls = 0;
   uint8_t resolvedStyles[4] = {0, 1, 2, 3};
 };

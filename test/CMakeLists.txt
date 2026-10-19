@@ -100,3 +100,4 @@ add_test(NAME BleLearning COMMAND ${CMAKE_COMMAND} -E env "CXX=${CMAKE_CXX_COMPI
 add_test(NAME RemoteButtonInputIntegration COMMAND ${CMAKE_COMMAND} -E env "CXX=${CMAKE_CXX_COMPILER}" ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_remote_button_input.py)
 add_test(NAME BleBuildVersion COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_ble_build_version.py)
 add_test(NAME BleControllerLink COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_ble_controller.py)
+add_test(NAME BleBondedReconnect COMMAND ${CMAKE_COMMAND} -E env "CXX=${CMAKE_CXX_COMPILER}" ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_ble_reconnect.py)

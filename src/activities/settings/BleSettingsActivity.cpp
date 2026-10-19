@@ -99,7 +99,7 @@ void BleSettingsActivity::onBackButton() {
 uint32_t BleSettingsActivity::signature() const {
   const auto st = bleturner::status();
   return (st.running ? 1u : 0u) | (st.scanning ? 2u : 0u) | (st.connected ? 4u : 0u) | (st.connecting ? 8u : 0u) |
-         (st.stopping ? 16u : 0u) | (SETTINGS.ble.enabled ? 32u : 0u) |
+         (st.stopping ? 16u : 0u) | (SETTINGS.ble.enabled ? 32u : 0u) | (st.starting ? 64u : 0u) |
          static_cast<uint32_t>(bleturner::bondCount()) << 8 | static_cast<uint32_t>(bleturner::foundCount()) << 16;
 }
 
@@ -113,6 +113,8 @@ void BleSettingsActivity::refresh() {
   } else if (bleturner::takeConnectFailure(failure, sizeof(failure))) {
     LOG_ERR("BLE", "%s", failure);
     snprintf(status, sizeof(status), "%s", tr(STR_BT_FAILED));
+  } else if (!st.running && st.starting) {
+    snprintf(status, sizeof(status), "%s", tr(STR_BT_STARTING));
   } else if (!st.running) {
     snprintf(status, sizeof(status), "%s", tr(STR_BT_START_FAILED));
   } else if (st.connected) {

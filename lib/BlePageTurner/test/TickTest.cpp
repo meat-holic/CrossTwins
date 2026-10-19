@@ -365,6 +365,27 @@ TEST_F(TickTest, FirstPolicyAndEmptyPriorityArePropagatedToRadio) {
   EXPECT_EQ(radio().armCalls, 1u);
 }
 
+TEST_F(TickTest, SleepResumeRearmsTheFirstPolicyWithoutChangingTheSavedRemote) {
+  config.pick = 1;
+  strcpy(config.peerAddr, "7d:de:5c:bd:ae:ca");
+  running();
+  pass(fake::reading());
+  ASSERT_EQ(radio().armCalls, 1u);
+  ASSERT_TRUE(bleturner::beforeSleep(1000));
+  EXPECT_FALSE(radio().running);
+  auto asleep = fake::reading();
+  asleep.sleeping = true;
+  pass(asleep);
+  EXPECT_FALSE(radio().running);
+  running(2);
+  pass(fake::reading(2));
+  EXPECT_EQ(radio().armCalls, 2u);
+  EXPECT_EQ(radio().armedPick, 1);
+  EXPECT_EQ(radio().armedAddr, "7d:de:5c:bd:ae:ca");
+  EXPECT_EQ(config.pick, 1);
+  EXPECT_STREQ(config.peerAddr, "7d:de:5c:bd:ae:ca");
+}
+
 TEST_F(TickTest, ConnectedRemoteTurnsPagesWithItsOwnTable) {
   strcpy(config.peerAddr, "7d:de:5c:bd:ae:ca");
   config.remoteCount = 2;

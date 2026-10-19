@@ -145,3 +145,30 @@ TEST(FontCacheManagerTest, IncrementalPrewarmRequestsAccumulation) {
   ASSERT_EQ(1, font.prewarmCallCount);
   EXPECT_TRUE(font.prewarmCalls[0].accumulate);
 }
+
+TEST(FontCacheManagerTest, HeapCriticalReleaseUsesResidentReleaseForEverySdFontWithoutAllocating) {
+  SdCardFont readerFont;
+  SdCardFont uiFont;
+  FontDecompressor decompressor;
+  const std::map<int, EpdFontFamily> noBuiltinFonts;
+  const std::map<int, SdCardFont*> sdFonts{{7, &readerFont}, {8, &uiFont}};
+  FontCacheManager manager(noBuiltinFonts, sdFonts, kNoTtfFonts);
+  manager.setFontDecompressor(&decompressor);
+
+  heapAllocationCount = 0;
+  countHeapAllocations = true;
+  manager.releaseSdFontCaches();
+  manager.releaseSdFontCaches();
+  countHeapAllocations = false;
+
+  EXPECT_EQ(0U, heapAllocationCount);
+  EXPECT_EQ(2, decompressor.clearCalls);
+  EXPECT_EQ(2, readerFont.releaseCalls);
+  EXPECT_EQ(2, uiFont.releaseCalls);
+  EXPECT_EQ(0, readerFont.clearCalls);
+  EXPECT_EQ(0, uiFont.clearCalls);
+  manager.prewarmCache(7, "page", 1);
+  manager.prewarmCache(8, "home", 1);
+  EXPECT_STREQ("page", readerFont.prewarmCalls[0].text);
+  EXPECT_STREQ("home", uiFont.prewarmCalls[0].text);
+}
