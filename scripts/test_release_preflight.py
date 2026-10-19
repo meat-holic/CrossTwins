@@ -56,7 +56,7 @@ class PreflightContracts(unittest.TestCase):
         self.assertEqual(ctx()["firmware_version"], VERSION)
         self.assertEqual(context(REPOSITORY, "v1.6.5-ct.4", SHA, SHA, SDK_SHA,
                                  "1.6.5", "1234", "2")["firmware_suffix"], "-ct.4")
-        for counter in (5, 6):
+        for counter in (5, 6, 7):
             current = context(REPOSITORY, f"v1.6.5-ct.{counter}", SHA, SHA, SDK_SHA,
                               "1.6.5", "1234", "2")
             validate_context(current)

@@ -871,6 +871,25 @@ TEST(CrossTwinsReleaseList, Ct6KeepsSettingsAndCt5UpgradeContract) {
   EXPECT_STREQ(output, "CrossTwins-1.6.5-CT.6");
 }
 
+TEST(CrossTwinsReleaseList, Ct7KeepsSettingsAndCt6UpgradeContract) {
+  const auto body = "[" + crossTwinsRelease("v1.6.5-ct.6", "2026-10-17T07:00:00Z", false) + "," +
+                    crossTwinsRelease("v1.6.5-ct.7", "2026-10-19T15:00:00Z", false) + "]";
+  ReleaseListParser p;
+  ASSERT_TRUE(p.feed(body.data(), body.size()));
+  ASSERT_TRUE(p.finishPage());
+  ASSERT_TRUE(p.foundFirmware());
+  EXPECT_STREQ(p.getTagName(), "v1.6.5-ct.7");
+  EXPECT_STREQ(p.getFirmwareUrl(),
+               "https://github.com/meat-holic/CrossTwins/releases/download/v1.6.5-ct.7/"
+               "crosspoint-1.6.5-ct.7-x3-x4.bin");
+  EXPECT_EQ(compareFirmwareVersions("v1.6.5-ct.7", "1.6.5-ct.6+abc1234"), FirmwareVersionOrder::Newer);
+  EXPECT_EQ(compareFirmwareVersions("v1.6.5-ct.7", "1.6.5-ct.7+abc1234"), FirmwareVersionOrder::Equal);
+  EXPECT_EQ(compareFirmwareVersions("v1.6.5-ct.6", "1.6.5-ct.7+abc1234"), FirmwareVersionOrder::Older);
+  char output[48]{};
+  ASSERT_TRUE(formatSettingsFirmwareVersionLabel("1.6.5-ct.7+abc1234", "CrossTwins", output, sizeof(output)));
+  EXPECT_STREQ(output, "CrossTwins-1.6.5-CT.7");
+}
+
 TEST(CrossTwinsReleaseList, StableCanBeNewest) {
   const auto body = "[" + crossTwinsRelease("v1.6.5-ct.2", "2026-10-09T01:58:11Z") + "," +
                     crossTwinsRelease("v1.6.5", "2026-10-10T01:58:11Z", false) + "]";
