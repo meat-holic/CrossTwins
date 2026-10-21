@@ -12,6 +12,7 @@
 #include <string>
 #include <vector>
 #define LOG_ERR(...) ((void)0)
+#define LOG_DBG(...) ((void)0)
 inline GfxRenderer* ownerUnderTest = nullptr;
 inline bool failFontObject = false;
 void* operator new(size_t size, const std::nothrow_t&) noexcept {
@@ -28,6 +29,14 @@ SdCardFont::~SdCardFont() {
 }
 @RENDERER_METHODS@
 @REGISTRY_METHODS@
+// SD enumeration is faked; discovery sorting, cap and retained capacity are production code.
+static std::vector<SdCardFontFamilyInfo> discoveredFamilies;
+void SdCardFontRegistry::scanRoot(const char* root, std::vector<SdCardFontFamilyInfo>& out) {
+  if (std::string(root) == FONTS_DIR_HIDDEN) {
+    out.insert(out.end(), discoveredFamilies.begin(), discoveredFamilies.end());
+  }
+}
+@REGISTRY_DISCOVERY@
 SdCardFontFamilyInfo makeFamily(const char* name = "Korean") {
   return {name, {{"fixture12", 12, 0}, {"fixture16", 16, 0}}, false};
 }
@@ -184,4 +193,47 @@ TEST(FontOwnership, IdCollisionKeepsExistingRendererEntry) {
   EXPECT_TRUE(renderer.sdCardFonts_.empty());
   EXPECT_EQ(manager.getFontId(family.name), 0);
   ownerUnderTest = nullptr;
+}
+
+TEST(FontRegistryDiscovery, DoesNotReserveAllFamiliesForOneInstalledFont) {
+  discoveredFamilies = {makeFamily()};
+  SdCardFontRegistry registry;
+  ASSERT_TRUE(registry.discover());
+  ASSERT_EQ(registry.getFamilyCount(), 1);
+  EXPECT_LT(registry.getFamilies().capacity(), static_cast<size_t>(SdCardFontRegistry::MAX_SD_FAMILIES));
+  EXPECT_EQ(registry.getFamilies()[0].files[0].pointSize, 12);
+}
+
+TEST(FontRegistryDiscovery, RescanReleasesHighWaterCapacityAndEmptyScanReleasesStorage) {
+  discoveredFamilies.clear();
+  for (int i = 0; i < SdCardFontRegistry::MAX_SD_FAMILIES; ++i) {
+    auto family = makeFamily();
+    family.name = std::to_string(i);
+    discoveredFamilies.push_back(std::move(family));
+  }
+  SdCardFontRegistry registry;
+  ASSERT_TRUE(registry.discover());
+  ASSERT_EQ(registry.getFamilyCount(), SdCardFontRegistry::MAX_SD_FAMILIES);
+  discoveredFamilies = {makeFamily("한글")};
+  for (int repeat = 0; repeat < 3; ++repeat) {
+    ASSERT_TRUE(registry.discover());
+    EXPECT_EQ(registry.getFamilyCount(), 1);
+    EXPECT_LT(registry.getFamilies().capacity(), static_cast<size_t>(SdCardFontRegistry::MAX_SD_FAMILIES));
+    EXPECT_EQ(registry.getFamilies()[0].name, "한글");
+  }
+  discoveredFamilies.clear();
+  EXPECT_FALSE(registry.discover());
+  EXPECT_EQ(registry.getFamilies().capacity(), 0U);
+}
+
+TEST(FontRegistryDiscovery, SortingAndFamilyLimitPreserveCatalogContents) {
+  discoveredFamilies = {makeFamily("Zulu"), makeFamily("Alpha"), makeFamily("Korean")};
+  SdCardFontRegistry registry;
+  ASSERT_TRUE(registry.discover());
+  ASSERT_EQ(registry.getFamilyCount(), 3);
+  EXPECT_EQ(registry.getFamilies()[0].name, "Alpha");
+  EXPECT_EQ(registry.getFamilies()[2].name, "Zulu");
+  for (int i = 0; i < SdCardFontRegistry::MAX_SD_FAMILIES; ++i) discoveredFamilies.push_back(makeFamily());
+  ASSERT_TRUE(registry.discover());
+  EXPECT_EQ(registry.getFamilyCount(), SdCardFontRegistry::MAX_SD_FAMILIES);
 }
