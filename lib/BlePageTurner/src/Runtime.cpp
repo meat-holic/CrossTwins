@@ -46,6 +46,12 @@ std::atomic<bool> radioIdleStopped{false};
 std::atomic<bool> rearmRequested{false};
 std::atomic<bool> heldForBuild{false};
 bool connectRequested = false;
+// pairedCount() is authoritative only after a successful SDK begin; tables are not a bond registry.
+std::atomic<bool> bondsLoaded{false};
+bool manuallyDisconnected = false;
+// Keep selected-only polls out of a scan whose SDK cached state may lag its timer.
+uint32_t scanStartedMs = 0;
+uint32_t scanDurationMs = 0;
 std::atomic<Why> startRefusal{Why::Ok};
 // The start in flight was asked for at Home (S3 profile): its heap rules differ. Set by the starter.
 std::atomic<bool> startFromHome{false};
@@ -58,6 +64,7 @@ struct Visit {
   // Each visit asks for the radio once, so a refusal does not churn allocations.
   bool attempted = false;
   bool reconnectArmed = false;
+  bool wasLinked = false;
   bool manualConnect = false;
   uint32_t retryAtMs = 0;
   uint8_t retries = 0;
@@ -90,6 +97,18 @@ void say(const bool error, const char* format, ...) {
   va_end(args);
 }
 
+bool reconnectPossible() {
+  if (manuallyDisconnected) return false;
+  if (config->pick == 0 && config->peerAddr[0] == '\0') return false;
+  if (attemptInFlight.load(std::memory_order_acquire) || !bondsLoaded.load(std::memory_order_acquire))
+    return true;  // Never suppress unknown NVS bonds under pick=1.
+  if (config->pick != 0) return port::bondCount() != 0;
+  for (uint8_t i = 0; i < port::bondCount(); ++i) {
+    if (strncmp(config->peerAddr, port::bond(i).addr, sizeof(config->peerAddr)) == 0) return true;
+  }
+  return false;
+}
+
 RadioInputs inputsFor(const Phase phase, const Scene& s) {
   RadioInputs in{};
   in.phase = phase;
@@ -100,7 +119,7 @@ RadioInputs inputsFor(const Phase phase, const Scene& s) {
   in.storageBusy = s.storageBusy;
   in.heldForBuild = heldForBuild.load(std::memory_order_relaxed);
   in.idleStopped = radioIdleStopped.load(std::memory_order_relaxed);
-  in.hasBond = config->peerAddr[0] != '\0';
+  in.hasBond = reconnectPossible();
   in.linked = true;
   return in;
 }
@@ -166,6 +185,7 @@ bool beginOwned() {
     heapTracker.inconclusive();
     return false;
   }
+  bondsLoaded.store(true, std::memory_order_release);
   if (attemptCancelled.load(std::memory_order_acquire)) {
     heapTracker.inconclusive();
     port::end(0);
@@ -235,8 +255,13 @@ void drainRemote() {
   }
 }
 
-// Once per visit: the SDK finds a bonded remote again only after this.
+// Once per visit: pick=0 arms only its chosen bond; pick=1 retains SDK all-bond reconnect.
 void armReconnectOnce() {
+  if (manuallyDisconnected) return;
+  const bool linkedNow = port::connected();
+  // A link established in Settings may have no selected plan. Arm it before poll on peer loss.
+  if (config->pick == 0 && visit.wasLinked && !linkedNow) visit.reconnectArmed = false;
+  visit.wasLinked = linkedNow;
   if (visit.reconnectArmed || port::stopping()) return;
   visit.reconnectArmed = true;
   if (!port::armBondedReconnect(config->pick, config->peerAddr)) {
@@ -306,6 +331,7 @@ void stepLinkNote(const bool entered, const bool acknowledged) {
                !attemptInFlight.load(std::memory_order_acquire);
   in.runningMs = noteRadioUp ? port::nowMs() - noteRadioUpSinceMs : 0;
   in.acknowledged = acknowledged;
+  in.hasBond = reconnectPossible();
   LinkNote note = nextLinkNote(linkNoteNow.load(std::memory_order_relaxed), in);
   if (visit.manualConnect && in.refused && note == LinkNote::Failed) {
     const Why refused = startRefusal.load(std::memory_order_relaxed);
@@ -378,6 +404,10 @@ void resetForTests() {
   rearmRequested.store(false);
   heldForBuild.store(false);
   connectRequested = false;
+  bondsLoaded.store(false, std::memory_order_release);
+  manuallyDisconnected = false;
+  scanStartedMs = 0;
+  scanDurationMs = 0;
   startRefusal.store(Why::Ok);
   startFromHome.store(false);
   heapTracker.fragmentedInRow = 0;
@@ -403,7 +433,17 @@ void begin(const Host& h, Config& c) {
   config = &c;
 }
 
-void requestConnect() { connectRequested = true; }
+void requestConnect() {
+  connectRequested = true;
+  if (manuallyDisconnected) {
+    manuallyDisconnected = false;
+    visit.attempted = false;
+    visit.reconnectArmed = false;
+    // SDK disconnect suppresses auto-reconnect until a fresh begin or explicit connect.
+    // Restart through the existing owner so pick=1 resumes every bond, not one chosen peer.
+    detail::suspend(0);
+  }
+}
 
 bool tick(const Scene& s) {
   if (!port::compiledIn()) return false;
@@ -411,6 +451,10 @@ bool tick(const Scene& s) {
   // A book visit starts: the book comes in front, or another visit of it does.
   const bool entered = s.where == Where::Reader && (lastScene.where != Where::Reader || s.visit != lastScene.visit);
   lastScene = s;
+  if (s.sleeping) {
+    detail::suspend(0);
+    return false;
+  }
   // Finish a stop in the background without blocking input.
   if (port::stopping() && port::nowMs() - lastCleanupMs >= 250) {
     lastCleanupMs = port::nowMs();
@@ -431,6 +475,7 @@ bool tick(const Scene& s) {
     if (s.visit != visit.id) heldForBuild.store(false, std::memory_order_relaxed);
     visit.attempted = false;
     visit.reconnectArmed = false;
+    visit.wasLinked = false;
     visit.manualConnect = false;
     router = Router();  // the settings screen may have changed the tables meanwhile
     visit.retryAtMs = 0;
@@ -561,6 +606,8 @@ bool tick(const Scene& s) {
 }
 
 bool beforeScreenChange(const uint32_t endTimeoutMs, const bool nextIsReader) {
+  pairing = Pairing{};
+  scanDurationMs = 0;
   // Up since Home (S3 profile) and the next screen is a book: the stack stays, so the book does not have to
   // find 46 KB of internal RAM in the heap its own pages left.
   if (nextIsReader && activeProfile().homeStartLargest != 0 && config->enabled && port::running() &&
@@ -579,7 +626,11 @@ bool stopNow(const uint32_t timeoutMs) {
   return true;
 }
 
-bool beforeSleep(const uint32_t timeoutMs) { return stopNow(timeoutMs); }
+bool beforeSleep(const uint32_t timeoutMs) {
+  pairing = Pairing{};
+  scanDurationMs = 0;
+  return stopNow(timeoutMs);
+}
 
 void settleStart() {
   // Never stop a start that is still in flight: its task owns the NimBLE discovery, and a
@@ -655,39 +706,76 @@ LinkNote linkNote() { return linkNoteNow.load(std::memory_order_relaxed); }
 
 void acknowledgeLinkNote() { stepLinkNote(false, true); }
 
-bool switchOn() { return port::compiledIn() && startSync(); }
+bool switchOn() {
+  manuallyDisconnected = false;
+  return port::compiledIn() && startSync();
+}
 
 bool switchOff() {
+  pairing = Pairing{};
+  scanDurationMs = 0;
   radioIdleStopped.store(false, std::memory_order_relaxed);
   readerStartDeferred.store(false, std::memory_order_relaxed);
   return detail::suspend(1000);
 }
 
 bool service() {
-  port::poll();
-  if (pairing.addr[0] == '\0' || !port::connected() ||
-      strncmp(port::linked().addr, pairing.addr, sizeof(pairing.addr)) != 0) {
-    return false;
+  bool changed = false;
+  if (pairing.addr[0] != '\0') {
+    if (!port::connected() || strncmp(port::linked().addr, pairing.addr, sizeof(pairing.addr)) != 0) {
+      // The SDK worker advances pairing without poll(). Status flags are not an atomic
+      // completion event: only takeConnectFailure may cancel this pending request.
+      return false;
+    }
+    memcpy(config->peerAddr, pairing.addr, sizeof(config->peerAddr));
+    memcpy(config->peerName, pairing.name, sizeof(config->peerName));
+    pairing = Pairing{};
+    changed = true;
   }
-  memcpy(config->peerAddr, pairing.addr, sizeof(config->peerAddr));
-  memcpy(config->peerName, pairing.name, sizeof(config->peerName));
-  pairing = Pairing{};
-  return true;
+  // A scan can expire before SDK isScanning() is refreshed by poll(). Under pick=0,
+  // wait for its requested duration, explicitly stop it, then arm before polling.
+  if (scanDurationMs != 0) {
+    if (port::nowMs() - scanStartedMs >= scanDurationMs) {
+      port::scan(0);
+      scanDurationMs = 0;
+    } else if (config->pick == 0) {
+      return changed;
+    }
+  }
+  // Settings owns a poll path too. Apply selected-only policy before it can try any bond.
+  if (!manuallyDisconnected && port::running() && config->pick == 0) {
+    port::armBondedReconnect(config->pick, config->peerAddr);
+  }
+  port::poll();
+  return changed;
 }
 
-void scan(const uint32_t durationMs) { port::scan(durationMs); }
+void scan(const uint32_t durationMs) {
+  scanStartedMs = port::nowMs();
+  scanDurationMs = durationMs;
+  port::scan(durationMs);
+}
 
 bool pair(const char* addr, const char* name) {
   // Only a candidate until it links: a pairing that fails must not replace a bonded choice with
   // an address the stack cannot reconnect.
   pairing = Pairing{};
-  if (!config->enabled || !switchOn() || !port::connect(addr)) return false;
+  if (!config->enabled || !switchOn()) return false;
+  if (!port::connect(addr)) {
+    manuallyDisconnected = true;
+    port::disconnect();
+    return false;
+  }
   strncpy(pairing.addr, addr, sizeof(pairing.addr) - 1);
   strncpy(pairing.name, name, sizeof(pairing.name) - 1);
   return true;
 }
 
-void disconnect() { port::disconnect(); }
+void disconnect() {
+  pairing = Pairing{};
+  manuallyDisconnected = true;
+  port::disconnect();
+}
 
 bool forget(const char* addr) {
   port::forget(addr);
@@ -707,7 +795,15 @@ Peer bond(const uint8_t index) { return port::bond(index); }
 uint8_t foundCount() { return port::foundCount(); }
 Peer found(const uint8_t index) { return port::found(index); }
 Peer linked() { return port::linked(); }
-bool takeConnectFailure(char* out, const size_t outLen) { return port::takeConnectFailure(out, outLen); }
+bool takeConnectFailure(char* out, const size_t outLen) {
+  if (!port::takeConnectFailure(out, outLen)) return false;
+  if (pairing.addr[0] != '\0') {
+    pairing = Pairing{};
+    manuallyDisconnected = true;
+    port::disconnect();
+  }
+  return true;
+}
 
 bool pollEvent(Event& event) {
   port::KeyPress key;

@@ -26,15 +26,41 @@ inline constexpr size_t kStartFreeBytes = kStackBytes + kMinimumLargestBlockByte
 // and a device lying still eats its battery.
 inline constexpr uint32_t kIdleOffMs = 30u * 1000u;
 
-// C3-only port: no PSRAM allocation or Home radio startup.
+// Upstream PSRAM profile retained for explicit comparison tests only; activeProfile never selects it.
+// What a chip's stack costs and where the radio may start. X3 (C3, stack pools cut down): 49,152 B as
+// logged in every X3 start, and the reader there needs a whole 32 KiB block (the inflate ring is a malloc
+// in the same small heap). S3 with NimBLE's host in PSRAM (FREEINK_BLE_STACK_IN_PSRAM, set by
+// scripts/s3_nimble_psram.h): the unit measured on 13/10/2026 went from free 124,752 / largest 81,908 at
+// Home to 78,244 / 36,852, so the stack took 46,508 B of internal RAM and 45,056 B of the largest block.
 struct Profile {
   size_t stackBytes;
-  size_t startFreeBytes;
-  size_t minimumLargest;
-  size_t homeStartLargest;
+  size_t startFreeBytes;    // stackBytes plus the reader's room
+  size_t minimumLargest;    // the largest block needed before and after the stack
+  size_t homeStartLargest;  // 0: the radio does not start at Home; else the largest block Home must have
 };
+inline constexpr size_t kS3StackBytes = 46508 + 4096;  // measured, plus a margin of one allocator page
+inline constexpr size_t kS3StackLargestDrop = 45056;
+// On the S3 malloc and new above 4,096 B go to PSRAM (prebuilt sdkconfig.h: CONFIG_SPIRAM_USE_MALLOC=1,
+// CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=4096): the inflate ring, the layout buffers and the picture buffers never
+// ask internal RAM for a block bigger than this. The heaviest page build on the host asks 16,560 B live in
+// such requests and 4,096 B at most in one (HugeBookSection.S3InternalCensusOfTheHeaviestBuild), counting
+// operator new only. Malloc and task stacks are not in that census, so the room kept contiguous after the stack
+// is six of the largest request (24,576 B), wider than the four the census alone would justify.
+inline constexpr size_t kS3InternalAllocMax = 4096;
+inline constexpr size_t kS3MinimumLargest = 6 * kS3InternalAllocMax;
 inline constexpr Profile kX3Profile{kStackBytes, kStartFreeBytes, kMinimumLargestBlockBytes, 0};
+inline constexpr Profile kS3Profile{kS3StackBytes, kS3StackBytes + kS3MinimumLargest, kS3MinimumLargest,
+                                    kS3MinimumLargest + kS3StackLargestDrop + 2048};
+// CT supports C3 (RISC-V) and S3 (Xtensa); Runtime.cpp does not include Arduino/sdkconfig headers.
+// CT has not enabled or measured the upstream NimBLE external-pool configuration.
+// Select S3 explicitly, but retain the conservative CT admission floor and no Home start.
+// These are provisional guard thresholds, not measured S3 stack consumption.
+inline constexpr Profile kS3InternalProfile{kStackBytes, kStartFreeBytes, kMinimumLargestBlockBytes, 0};
+#if (defined(CONFIG_IDF_TARGET_ESP32S3) && CONFIG_IDF_TARGET_ESP32S3) || defined(__XTENSA__)
+inline constexpr const Profile& activeProfile() { return kS3InternalProfile; }
+#else
 inline constexpr const Profile& activeProfile() { return kX3Profile; }
+#endif
 
 constexpr bool radioRearmWanted(bool idleStopped, bool entered, bool requested, bool buildPainted) {
   return entered || requested || (buildPainted && !idleStopped);
@@ -61,7 +87,7 @@ struct RadioInputs {
   uint32_t idleMs;    // since a remote was last connected (or the radio came up)
   Heap heap;
   bool connectionBusy = false;
-  bool hasBond = false;  // a remote has been chosen (Config::peerAddr): the only reason to start at Home
+  bool hasBond = false;  // an eligible bond exists, or the SDK has not loaded its persisted bonds yet
 };
 
 // The ONE answer to "may the radio be on now". Everything that starts, keeps or stops the
@@ -74,13 +100,14 @@ constexpr Why radioVerdict(const RadioInputs& in, const Profile& profile = activ
       if (in.storageBusy) return Why::StorageBusy;
       // Pairing is the user asking for the radio now: the book's conditions do not apply.
       if (in.where == Where::PairingScreen) return Why::Ok;
-      // S3: the stack goes in at Home, whose heap is whole, and the book inherits it.
+      // Only an explicitly supplied Home-start profile permits this; active CT profiles do not.
       if (in.where == Where::Home) {
         if (profile.homeStartLargest == 0 || !in.hasBond) return Why::NotReading;
         if (!in.pageShown) return Why::PageNotShown;
         return in.idleStopped ? Why::IdleNoLink : Why::Ok;
       }
       if (in.where != Where::Reader) return Why::NotReading;
+      if (!in.hasBond) return Why::NoBond;
       if (!in.pageShown) return Why::PageNotShown;
       // A radio stopped for a starved build waits for the page, not for a key: restarting it
       // on a key release starved the build again and the start held the loop for 2.85 s (X3,
@@ -131,6 +158,7 @@ struct NoteInputs {
   bool refused;        // this visit's radio start was refused (heap rules, rollback)
   uint32_t runningMs;  // how long the radio has been up without a break in this visit
   bool acknowledged;   // a page turn was applied
+  bool hasBond;        // an eligible reconnect candidate, or persisted bonds not loaded yet
 };
 
 // The ONE answer to "what does the status bar say about the remote now".
@@ -138,11 +166,11 @@ constexpr LinkNote nextLinkNote(const LinkNote note, const NoteInputs& in) {
   if (!in.enabled || !in.reading) return LinkNote::None;
   // Every visit starts over. A remote still linked has nothing to wait for, and a radio off for
   // idleness does not try until a key of the device wakes it.
-  if (in.entered) return in.linked || in.idleStopped ? LinkNote::None : LinkNote::Connecting;
+  if (in.entered) return in.linked || in.idleStopped || !in.hasBond ? LinkNote::None : LinkNote::Connecting;
   switch (note) {
     case LinkNote::Connecting:
       if (in.linked) return LinkNote::None;
-      return in.refused || in.runningMs >= kLinkNoteFailMs ? LinkNote::Failed : LinkNote::Connecting;
+      return in.refused || !in.hasBond || in.runningMs >= kLinkNoteFailMs ? LinkNote::Failed : LinkNote::Connecting;
     case LinkNote::Failed:
     case LinkNote::Connected:
     case LinkNote::LowMemory:

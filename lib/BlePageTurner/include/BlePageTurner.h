@@ -36,7 +36,7 @@ struct Heap {
 // blePick, blePeerAddr, blePeerName, blePrevKeyUsage, bleNextKeyUsage and bleRemotes.
 struct Config {
   uint8_t enabled = 0;
-  uint8_t pick = 1;  // 1: the first remote to come up; 0: the chosen remote first
+  uint8_t pick = 1;  // 1: the first bonded remote to come up; 0: the chosen remote only
   char peerAddr[18] = "";
   char peerName[32] = "";
   // HID usage learned for each direction from the decoded key path; 0 = not learned.
@@ -100,6 +100,7 @@ enum class Why : uint8_t {
   IdleNoLink,      // nothing connected for kIdleOffMs
   HeapLow,         // not enough heap for the stack
   HeapInPieces,    // enough in total, but no block the stack can take
+  NoBond,          // no eligible remote; previous reason values remain stable
 };
 
 // Module -> host. Every pointer is required except heapMap.
@@ -128,8 +129,8 @@ struct Host {
   void (*heapMap)(const char* tag);
 };
 
-// Home is the first screen after boot with its first frame up; only a build with the S3 profile
-// (RadioPolicy.h) lets the radio start there.
+// Home is the first screen after boot with its first frame up. Active CT C3/S3 profiles
+// disable Home startup; only explicit comparison profiles permit it.
 enum class Where : uint8_t { Elsewhere, Reader, PairingScreen, Home };
 
 // Host -> module, once per main-loop pass.
@@ -151,8 +152,8 @@ void requestConnect();
 bool tick(const Scene& scene);
 // False: the radio is still stopping (or a start is in flight); call again next pass before
 // changing screens. endTimeoutMs: how long the SDK may wait for the stack to stop this call.
-// nextIsReader: the screen about to come is a book. A radio that came up at Home (S3 profile) is kept for
-// it, so the book finds the stack already in and the heap Home had.
+// nextIsReader: the screen about to come is a book. Only a profile permitting Home startup
+// keeps the stack for it; active CT profiles stop the radio on screen changes.
 bool beforeScreenChange(uint32_t endTimeoutMs = 0, bool nextIsReader = false);
 // Stops the radio now, waiting up to timeoutMs: a start in flight is cancelled or let finish, then
 // the stack stops. False: it did not stop in time. Main loop. A host that covers the page with a
@@ -191,7 +192,8 @@ Status status();
 Why why();
 
 // What the book's status bar says about the remote in place of its title. Connecting from the
-// moment a book is entered until a remote links; Failed when the radio was refused for this
+// moment a book with an eligible or not-yet-loaded bond is entered until a remote links;
+// known no-bond entry stays None. Failed when the radio was refused for this
 // visit or ran kLinkNoteFailMs without a link, until the next page turn; None otherwise.
 // nextLinkNote (RadioPolicy.h) decides; tick() and acknowledgeLinkNote() apply it.
 enum class LinkNote : uint8_t { None, Connecting, Failed, Connected, LowMemory };

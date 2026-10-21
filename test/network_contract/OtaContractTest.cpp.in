@@ -1,0 +1,131 @@
+#include <gtest/gtest.h>
+#include <algorithm>
+#include <cstring>
+#include <cstdint>
+#include <cstdio>
+#include <functional>
+#include <memory>
+#include <string>
+#include <vector>
+#include "network/OtaUpdater.h"
+#include "ReleaseJsonParser.h"
+#define CROSSPOINT_VERSION "1.6.5-ct.7"
+#define LOG_INF(...) ((void)0)
+#define LOG_DBG(...) ((void)0)
+#define LOG_ERR(...) ((void)0)
+bool oom=false;
+template<class T> auto makeUniqueNoThrow() { return oom ? std::unique_ptr<T>{} : std::make_unique<T>(); }
+using esp_err_t=int;
+using esp_ota_handle_t=int;
+constexpr int ESP_OK=0;
+struct esp_partition_t { size_t size=4096; } partition;
+bool noPartition=false;
+int beginError=0,writeError=0,endError=0,bootError=0,aborts=0,boots=0,begins=0;
+std::vector<uint8_t> written;
+const char* esp_err_to_name(int) { return "injected"; }
+const esp_partition_t* esp_ota_get_next_update_partition(void*) { return noPartition ? nullptr : &partition; }
+int esp_ota_begin(const esp_partition_t*,size_t,int* handle) { ++begins;*handle=1;written.clear();return beginError; }
+int esp_ota_write(int,const void* bytes,size_t n) { if(writeError)return writeError;
+  const auto p=static_cast<const uint8_t*>(bytes);written.insert(written.end(),p,p+n);return 0; }
+int esp_ota_abort(int) { ++aborts;return 0; }
+int esp_ota_end(int) { return endError; }
+int esp_ota_set_boot_partition(const esp_partition_t*) { if(bootError)return bootError;++boots;return 0; }
+int powerMode=7;
+struct WifiPowerSaveGuard { int saved=powerMode;WifiPowerSaveGuard(){powerMode=0;}~WifiPowerSaveGuard(){powerMode=saved;} };
+namespace firmware_flash { uint16_t chip=5;uint16_t runningPartitionChipId() { return chip; } }
+namespace board_tag {
+std::string board="x4";
+constexpr const char TAG[]="CROSSPOINT-BOARD-V1:x4;";
+constexpr size_t MAGIC_LEN=sizeof("CROSSPOINT-BOARD-V1:")-1;
+const char* boardName(){return board.c_str();}size_t boardNameLen(){return board.size();}
+// Actual streaming board-tag scanner methods are inserted below.
+@BOARD_DECLARATION@
+@BOARD_SCANNER@
+}
+struct HttpDownloader {
+  static inline std::string releaseBody;
+  static inline std::vector<uint8_t> image;
+  static inline std::vector<size_t> chunks;
+  static inline std::vector<std::string> urls;
+  static inline bool failRelease=false,failImage=false;
+  static int lastStatus(){return failRelease || failImage ? 0 : 200;}
+  static bool fetchUrl(const std::string& url,const std::function<bool(const uint8_t*,size_t)>& sink) {
+    urls.push_back(url);
+    if(url.starts_with("https://api.github.com/")) {
+      if(failRelease)return false;
+      return sink(reinterpret_cast<const uint8_t*>(releaseBody.data()),releaseBody.size());
+    }
+    size_t offset=0;
+    for(auto n:chunks) {
+      n=std::min(n,image.size()-offset);if(!sink(image.data()+offset,n))return false;offset+=n;
+    }
+    if(offset<image.size() && !sink(image.data()+offset,image.size()-offset))return false;
+    return !failImage;
+  }
+};
+@OTA_SOURCE@
+class OtaContract : public ::testing::Test {
+ protected:
+  OtaUpdater updater;
+  void SetUp() override {
+    oom=noPartition=false;beginError=writeError=endError=bootError=aborts=boots=begins=0;written.clear();
+    partition.size=4096;powerMode=7;firmware_flash::chip=5;board_tag::board="x4";
+    HttpDownloader::failRelease=HttpDownloader::failImage=false;HttpDownloader::urls.clear();HttpDownloader::chunks.clear();
+    HttpDownloader::image.assign(64,0);HttpDownloader::image[0]=0xE9;HttpDownloader::image[12]=5;
+    select(64);
+  }
+  void select(size_t size) {
+    HttpDownloader::releaseBody="[{\"tag_name\":\"v1.6.5-ct.8\",\"published_at\":\"2026-10-21T01:00:00Z\",\"draft\":false,\"prerelease\":false,\"assets\":[{\"name\":\"crosspoint-1.6.5-ct.8-x3-x4.bin\",\"size\":"+std::to_string(size)+",\"browser_download_url\":\"https://github.com/meat-holic/CrossTwins/releases/download/v1.6.5-ct.8/crosspoint-1.6.5-ct.8-x3-x4.bin\"}]}]";
+  }
+};
+TEST_F(OtaContract, FixedRepositoryAndUnsupportedBoardsStayExcluded) {
+  EXPECT_EQ(updater.checkForUpdate(),OtaUpdater::OK);EXPECT_TRUE(updater.isUpdateNewer());
+  ASSERT_EQ(HttpDownloader::urls.size(),1U);EXPECT_TRUE(HttpDownloader::urls[0].starts_with("https://api.github.com/repos/meat-holic/CrossTwins/releases?"));
+  for(auto board:{"sticky","x4pro","x4c","papermono"}) {
+    board_tag::board=board;HttpDownloader::urls.clear();EXPECT_EQ(updater.checkForUpdate(),OtaUpdater::NO_UPDATE);EXPECT_TRUE(HttpDownloader::urls.empty());
+  }
+}
+TEST_F(OtaContract, CheckFailureClearsPreviouslySelectedState) {
+  ASSERT_EQ(updater.checkForUpdate(),OtaUpdater::OK);
+  HttpDownloader::releaseBody="[broken";EXPECT_EQ(updater.checkForUpdate(),OtaUpdater::JSON_PARSE_ERROR);
+  EXPECT_FALSE(updater.isUpdateNewer());EXPECT_TRUE(updater.getLatestVersion().empty());EXPECT_EQ(updater.getTotalSize(),0U);
+  HttpDownloader::failRelease=true;EXPECT_EQ(updater.checkForUpdate(),OtaUpdater::HTTP_ERROR);
+  HttpDownloader::failRelease=false;oom=true;EXPECT_EQ(updater.checkForUpdate(),OtaUpdater::OOM_ERROR);
+}
+TEST_F(OtaContract, SplitHeaderWrittenExactlyOnceAndRestoresPowerPolicy) {
+  ASSERT_EQ(updater.checkForUpdate(),OtaUpdater::OK);HttpDownloader::chunks={1,2,3,5,3,2,1};
+  EXPECT_EQ(updater.installUpdate(),OtaUpdater::OK);EXPECT_EQ(written,HttpDownloader::image);EXPECT_EQ(boots,1);EXPECT_EQ(aborts,0);EXPECT_EQ(powerMode,7);
+}
+TEST_F(OtaContract, WrongChipAndMagicNeverWriteOrSwitchBootPartition) {
+  for(int bad=0;bad<3;++bad) {
+    written.clear();aborts=boots=0;HttpDownloader::image[0]=bad==0?0:0xE9;HttpDownloader::image[12]=bad==1?9:5;
+    firmware_flash::chip=bad==2?0xFFFF:5;ASSERT_EQ(updater.checkForUpdate(),OtaUpdater::OK);HttpDownloader::chunks={1,2,3};
+    EXPECT_EQ(updater.installUpdate(),OtaUpdater::WRONG_DEVICE_ERROR);EXPECT_TRUE(written.empty());EXPECT_EQ(boots,0);EXPECT_EQ(aborts,1);EXPECT_EQ(powerMode,7);
+  }
+}
+TEST_F(OtaContract, PartitionAndAssetSizeRejectBeforeErase) {
+  noPartition=true;ASSERT_EQ(updater.checkForUpdate(),OtaUpdater::OK);EXPECT_EQ(updater.installUpdate(),OtaUpdater::INTERNAL_UPDATE_ERROR);
+  noPartition=false;partition.size=32;EXPECT_EQ(updater.installUpdate(),OtaUpdater::INTERNAL_UPDATE_ERROR);EXPECT_EQ(begins,0);
+}
+TEST_F(OtaContract, TruncatedOversizeAndNetworkFailureAbortInactiveSlot) {
+  for(int fail=0;fail<3;++fail) {
+    aborts=boots=0;select(64);ASSERT_EQ(updater.checkForUpdate(),OtaUpdater::OK);
+    HttpDownloader::image.resize(fail==0?63:fail==1?65:64);HttpDownloader::failImage=fail==2;
+    EXPECT_EQ(updater.installUpdate(),OtaUpdater::HTTP_ERROR);EXPECT_EQ(boots,0);EXPECT_EQ(aborts,1);EXPECT_EQ(powerMode,7);
+    HttpDownloader::failImage=false;
+  }
+}
+TEST_F(OtaContract, BeginWriteVerifyAndBootFailuresCanRetry) {
+  ASSERT_EQ(updater.checkForUpdate(),OtaUpdater::OK);
+  for(int fail=0;fail<4;++fail) {
+    beginError=fail==0;writeError=fail==1;endError=fail==2;bootError=fail==3;
+    EXPECT_EQ(updater.installUpdate(),OtaUpdater::INTERNAL_UPDATE_ERROR);EXPECT_EQ(boots,0);EXPECT_EQ(powerMode,7);
+  }
+  beginError=writeError=endError=bootError=0;EXPECT_EQ(updater.installUpdate(),OtaUpdater::OK);EXPECT_EQ(boots,1);
+}
+TEST_F(OtaContract, ForeignBoardTagAcrossChunksAborts) {
+  auto tag=std::string("CROSSPOINT-BOARD-V1:x4pro;");
+  HttpDownloader::image.insert(HttpDownloader::image.end(),tag.begin(),tag.end());select(HttpDownloader::image.size());
+  ASSERT_EQ(updater.checkForUpdate(),OtaUpdater::OK);HttpDownloader::chunks={63,2,3,4,5};
+  EXPECT_EQ(updater.installUpdate(),OtaUpdater::WRONG_DEVICE_ERROR);EXPECT_EQ(boots,0);EXPECT_EQ(aborts,1);
+}

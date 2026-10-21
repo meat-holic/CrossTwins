@@ -80,7 +80,7 @@ with tempfile.TemporaryDirectory() as directory:
     executable = Path(directory) / "learning"
     cpp.write_text(harness)
     subprocess.run([os.environ.get("CXX", "c++"), "-std=c++20", "-I", str(ROOT / "lib/BlePageTurner/include"),
-                    "-I", str(ROOT / "freeink-sdk/libs/network/BleKeyboardHost/include"),
+                    "-I", str(Path(os.environ.get("BLETURNER_SDK_ROOT", ROOT / "freeink-sdk")) / "libs/network/BleKeyboardHost/include"),
                     str(cpp), "-o", str(executable)], check=True)
     subprocess.run([str(executable)], check=True)
 print("Bluetooth learning regression checks passed")

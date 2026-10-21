@@ -6,11 +6,16 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include <cstring>
+#include <functional>
+#include <cstdint>
 #include "network/ProtectedPaths.h"
+#define tr(id) #id
 #define LOG_DBG(...) ((void)0)
 #define LOG_ERR(...) ((void)0)
 void resetTaskWatchdogIfSubscribed() {}
-void clearBookCache(const char*) {}
+std::vector<std::string> cleared;
+void clearBookCache(const char* p) { cleared.push_back(p); }
 unsigned long millis() { return 0; }
 class String : public std::string {
  public:
@@ -25,6 +30,7 @@ class String : public std::string {
   int indexOf(const char* c) const { auto n = find(c); return n == npos ? -1 : static_cast<int>(n); }
   int lastIndexOf(char c) const { auto n = rfind(c); return n == npos ? -1 : static_cast<int>(n); }
   String substring(int first, int last = -1) const { return substr(first, last < 0 ? npos : last - first); }
+  void replace(char from,char to){std::replace(begin(),end(),from,to);}
   char charAt(size_t n) const { return (*this)[n]; }
   void trim() { while (!empty() && std::isspace(static_cast<unsigned char>(back()))) pop_back();
     while (!empty() && std::isspace(static_cast<unsigned char>(front()))) erase(0, 1); }
@@ -37,40 +43,97 @@ constexpr const char* HIDDEN_ITEMS[] = {"System Volume Information", "XTCache"};
 struct HalFile {
   bool opened = false, dir = false;
   std::string path;
+  size_t position = 0;
   explicit operator bool() const { return opened; }
   bool isDirectory() const { return dir; }
-  void close() { opened = false; }
-  HalFile openNextFile() { return {}; }
+  bool isOpen() const {return opened;}
+  bool close();
+  size_t size() const;
+  int read(void*, size_t);
+  HalFile openNextFile();
+  bool getName(char* out,size_t n) const;
   bool rename(const char*);
   size_t write(const void*, size_t n);
 };
 struct StorageStub {
+  enum class ReadOpenResult { Ok, IoFailure, ResourceFailure };
+  bool readHandleFails=false;
+  ReadOpenResult openFileForReadChecked(const char*,const char* path,HalFile& file) {
+    if(readHandleFails)return ReadOpenResult::ResourceFailure;
+    file=open(path);return file?ReadOpenResult::Ok:ReadOpenResult::IoFailure;
+  }
   std::map<std::string, bool> entries;
   std::vector<std::string> mutations;
   std::vector<std::string> reads;
-  bool exists(const char* p) const { return entries.contains(p); }
-  HalFile open(const char* p) { reads.push_back(p); return {exists(p), entries[p], p}; }
+  mutable std::vector<std::string> probes;
+  std::map<std::string,std::string> data;
+  std::string failRemove, failRename, failOpen;
+  bool failRead=false, failClose=false;
+  size_t writeLimit=SIZE_MAX;
+  bool rename(const char* src,const char* dst) {
+    mutations.push_back("rename:"+std::string(dst));
+    if (std::string(src)==failRename || !exists(src) || exists(dst)) return false;
+    entries[dst]=entries[src]; entries.erase(src); data[dst]=data[src]; data.erase(src); return true;
+  }
+  bool exists(const char* p) const { probes.push_back(p); return entries.contains(p); }
+  HalFile open(const char* p) { reads.push_back(p); if(std::string(p)==failOpen) return {}; return {exists(p), exists(p) ? entries.at(p) : false, p}; }
   bool openFileForWrite(const char*, const String& p, HalFile& f) {
-    mutations.push_back("write:" + p); entries[p] = false; f = {true, false, p}; return true;
+    if(p==failOpen)return false; mutations.push_back("write:" + p); entries[p] = false; data[p]=""; f = {true, false, p}; return true;
   }
   bool mkdir(const char* p) { mutations.push_back("mkdir:" + std::string(p)); entries[p] = true; return true; }
-  bool remove(const char* p) { mutations.push_back("remove:" + std::string(p)); entries.erase(p); return true; }
-  bool rmdir(const char* p) { return remove(p); }
+  bool remove(const char* p) { mutations.push_back("remove:" + std::string(p)); if(std::string(p)==failRemove || (entries.contains(p) && entries.at(p)))return false; entries.erase(p); data.erase(p); return true; }
+  bool rmdir(const char* p) {
+    for(const auto& [path,dir]:entries) if(path.starts_with(std::string(p)+"/"))return false;
+    mutations.push_back("rmdir:"+std::string(p));return entries.erase(p)>0;
+  }
 } Storage;
-bool HalFile::rename(const char* p) { Storage.mutations.push_back("rename:" + std::string(p));
-  Storage.entries.erase(path); Storage.entries[p] = dir; return true; }
-size_t HalFile::write(const void*, size_t n) { Storage.mutations.push_back("data:" + path); return n; }
-struct HTTPUpload { String filename; };
+HalFile HalFile::openNextFile() {
+  const std::string prefix=path=="/"?"/":path+"/";size_t index=0;
+  for(const auto& [name,isDir]:Storage.entries) {
+    if(!name.starts_with(prefix) || name.size()==prefix.size() || name.find('/',prefix.size())!=std::string::npos)continue;
+    if(index++==position){++position;return {true,isDir,name};}
+  }
+  return {};
+}
+bool HalFile::getName(char* out,size_t n) const { const auto name=path.substr(path.find_last_of('/')+1);snprintf(out,n,"%s",name.c_str());return true; }
+bool HalFile::rename(const char* p) { return Storage.rename(path.c_str(),p); }
+bool HalFile::close() { opened=false; return !Storage.failClose; }
+size_t HalFile::size() const { return Storage.data[path].size(); }
+int HalFile::read(void* buf,size_t n) {
+  if(Storage.failRead)return -1;
+  auto& bytes=Storage.data[path];n=std::min(n,bytes.size()-position);
+  memcpy(buf,bytes.data()+position,n);position+=n;return static_cast<int>(n);
+}
+size_t HalFile::write(const void* bytes, size_t n) {
+  n=std::min(n,Storage.writeLimit);Storage.mutations.push_back("data:"+path);
+  Storage.data[path].append(static_cast<const char*>(bytes),n);return n;
+}
+bool removeBookFile(const char* p) { if(!Storage.remove(p))return false;clearBookCache(p);return true; }
+bool allocationFails=false;
+template<class T, class... Args> auto makeUniqueNoThrow(Args&&... args) {
+  return allocationFails ? std::unique_ptr<T>{} : std::make_unique<T>(std::forward<Args>(args)...);
+}
+using HalStorage=StorageStub;
+@DAV_COMMIT@
+enum { UPLOAD_FILE_START, UPLOAD_FILE_WRITE, UPLOAD_FILE_END, UPLOAD_FILE_ABORTED };
+struct HTTPUpload { String filename; int status=UPLOAD_FILE_START; const uint8_t* buf=nullptr; size_t currentSize=0; };
+struct FakeClient { bool live=true;bool connected(){return live;}void stop(){live=false;} };
 struct WebServer {
   std::map<std::string, String> args;
   String requestUri, destination;
   int status = 0;
   HTTPUpload incoming;
+  std::map<std::string,std::function<void()>> handlers;
+  template<class F> void on(const char* path,int,F callback){handlers[path]=callback;}
+  template<class... Args> void sendContent(Args&&...){}
+  void setContentLength(size_t){}
+  FakeClient connection; FakeClient& client(){return connection;}
   bool hasArg(const char* key) const { return args.contains(key); }
   String arg(const char* key) { return args[key]; }
   HTTPUpload& upload() { return incoming; }
   String uri() const { return requestUri; }
   String header(const char*) const { return destination; }
+  size_t clientContentLength() const { return 0; }
   template<class... Args> void send(int code, Args&&...) { status = code; }
   static String urlDecode(const String& input) {
     String out;
@@ -86,21 +149,49 @@ struct WebServer {
   }
 };
 @WEB_NORMALIZE@
+struct { int registry(){return 0;} } sdFontSystem;
+struct FontInstaller {
+  explicit FontInstaller(int) {}
+  static bool isValidFamilyName(const char* name){return *name && !strchr(name,'/');}
+  static bool isValidCpfontFilename(const char* name){return FsHelpers::isSafePathComponent(String(name));}
+  bool ensureFamilyDir(const char*){return true;}
+  static void buildFontPath(const char* family,const char* name,char* out,size_t n){snprintf(out,n,"/.fonts/%s/%s",family,name);}
+};
+constexpr int HTTP_GET=1;constexpr size_t CONTENT_LENGTH_UNKNOWN=SIZE_MAX;
+constexpr char webCss[]="css",iconsSvg[]="icons",crosspoint_iconSvg[]="logo";
+constexpr const char* webCssETag="css-tag";constexpr const char* iconsSvgETag="icon-tag";constexpr const char* crosspoint_iconSvgETag="logo-tag";
+size_t staticResponseSize=0;std::string staticResponseMime;
+void sendStaticContent(WebServer* server,const char*,size_t size,const char*,const char* mime){staticResponseSize=size;staticResponseMime=mime;server->send(200);}
 class CrossPointWebServer {
  public:
   std::unique_ptr<WebServer> server = std::make_unique<WebServer>();
-  struct UploadState { String fileName, path, error; size_t size=0, bufferPos=0; bool success=false; HalFile file; };
+  struct UploadState { String fileName, path, error; size_t size=0, bufferPos=0; bool success=false, ownsFile=false; HalFile file; static constexpr size_t UPLOAD_BUFFER_SIZE=4096; std::unique_ptr<uint8_t[]> buffer; };
+  void registerAssets() {
+@STATIC_ASSETS@
+  }
   void handleCreateFolder() const;
   void handleRename() const;
   void handleMove() const;
   void handleDownload() const;
-  void uploadBegin(UploadState& state) {
-    const auto& upload = server->upload();
-    unsigned long uploadStartTime=0, lastLoggedSize=0, totalWriteTime=0, writeCount=0;
-    (void)uploadStartTime; (void)lastLoggedSize; (void)totalWriteTime; (void)writeCount;
-@WEB_UPLOAD@
-  }
+  struct FontUploadState {
+    HalFile file;std::string familyName,filePath;bool valid=false,ownsFile=false,magicChecked=false;
+    size_t bytesWritten=0,bufferPos=0;static constexpr size_t BUFFER_SIZE=4096;std::unique_ptr<uint8_t[]> buffer;
+  } fontUpload;
+  void handleFontUploadData();
+  bool running=true;
+  bool cancel=false;
+  bool dropUploadIfCancelled() const { return cancel; }
+  void handleUpload(UploadState&) const;
+  void handleUploadPost(UploadState&) const;
+  void uploadBegin(UploadState& state) { handleUpload(state); }
+
 };
+bool isLibraryBookFile(const String& name){return name.endsWith(".epub");}
+namespace library { void markLibraryIndexDirty() {} }
+unsigned long uploadStartTime=0,totalWriteTime=0;size_t writeCount=0;
+unsigned long micros(){return 0;}
+@WEB_STREAMING@
+@FONT_UPLOAD@
 @WEB_MKDIR@
 @WEB_RENAME@
 @WEB_MOVE@
@@ -122,21 +213,35 @@ uint8_t wsUploadClientNum=255;
 void wsStart() { uint8_t num=0;
 @WS_WRITE@
 }
+void yield() {}
+const char* FIXED_DATE="Thu, 01 Jan 2024 00:00:00 GMT";
 enum { RAW_START, RAW_WRITE, RAW_END, RAW_ABORTED };
 struct HTTPRaw { int status; const uint8_t* buf=nullptr; size_t currentSize=1, totalSize=1; };
 class WebDAVHandler {
  public:
+  ~WebDAVHandler();
   String _putPath;
-  bool _putOk=false, _putExisted=false;
+  bool _putOk=false, _putExisted=false, _putTempOwned=false;
+  size_t _putReceived=0;
   HalFile _putFile;
   String getRequestPath(WebServer&) const;
   String getDestinationPath(WebServer&) const;
   bool isProtectedPath(const String&) const;
   void raw(WebServer&, const String&, HTTPRaw&);
+  void handlePut(WebServer&);void handlePropfind(WebServer&);
+  int getDepth(WebServer&)const{return 1;}
+  std::vector<std::string> listed;
+  void sendPropEntry(WebServer&,const String& path,bool,size_t,const String&)const { const_cast<WebDAVHandler*>(this)->listed.push_back(path); }
+  void handleDelete(WebServer&); void handleMkcol(WebServer&); void handleMove(WebServer&); void handleCopy(WebServer&);
+  bool getOverwrite(WebServer&) const { return true; }
 };
 @DAV_PATH@
 @DAV_GUARD@
+@DAV_DESTRUCTOR@
 @DAV_RAW@
+@DAV_PUT@
+@DAV_PROPFIND@
+@DAV_OPERATIONS@
 
 TEST(ProtectedPaths, CredentialsVariantsAndSiblingsAreDenied) {
   for (auto p : {"/.crosspoint/wifi.json", "/.CrossPoint/OPDS.JSON", "/.crosspoint/koreader.json.bak",
@@ -247,4 +352,199 @@ TEST(ProtectedPaths, WebdavDecodedRequestAndDestinationBlockAliasesAndUtf8Attack
   s.requestUri = "/책/%ED%95%9C%EA%B8%80.json";
   EXPECT_EQ(dav.getRequestPath(s),"/책/한글.json");
   EXPECT_FALSE(dav.isProtectedPath(dav.getRequestPath(s)));
+}
+
+TEST(NetworkBoundary, DeniesHiddenEncodedTransactionAndAliasPathsAtBothEndpoints) {
+  for(auto path : {"/.crosspoint/settings.json", "/books/.secret/a", "/books/a.davtmp", "/books/a.DAVBAK", "/System Volume Information/a", "/xtcache/a", "/%252e%252e/a", "/%", "/a\\b", "relative/a"}) {
+    WebDAVHandler dav;WebServer server;server.requestUri=path;
+    EXPECT_TRUE(dav.isProtectedPath(dav.getRequestPath(server)))<<path;
+    auto normalized=normalizeWebPath(path);
+    EXPECT_TRUE(normalized.isEmpty() || protectedpaths::isNetworkPathProtected(normalized.c_str()))<<path;
+  }
+}
+TEST(NetworkTransactions, PutPreservesOriginalOnShortWriteAndClosesTemporary) {
+  for(size_t limit : {size_t{0},size_t{1}}) {
+    Storage={};cleared.clear();Storage.entries["/book.epub"]=false;Storage.data["/book.epub"]="old";
+    WebServer server;server.requestUri="/book.epub";WebDAVHandler dav;
+    HTTPRaw raw{RAW_START};dav.raw(server,"",raw);ASSERT_TRUE(dav._putOk);
+    Storage.writeLimit=limit;const uint8_t bytes[]={1,2};raw={RAW_WRITE,bytes,2,2};dav.raw(server,"",raw);
+    raw.status=RAW_END;dav.raw(server,"",raw);
+    EXPECT_FALSE(dav._putOk);EXPECT_FALSE(dav._putFile.opened);EXPECT_EQ(Storage.data["/book.epub"],"old");
+    EXPECT_FALSE(Storage.exists("/book.epub.davtmp"));EXPECT_TRUE(cleared.empty());
+  }
+}
+TEST(NetworkTransactions, PutChecksCloseByteCountAndPromotionRollback) {
+  for(int failure=0;failure<4;++failure) {
+    Storage={};cleared.clear();Storage.entries["/book.epub"]=false;Storage.data["/book.epub"]="old";
+    WebServer server;server.requestUri="/book.epub";WebDAVHandler dav;HTTPRaw raw{RAW_START};dav.raw(server,"",raw);
+    const uint8_t bytes[]={1,2};raw={RAW_WRITE,bytes,2,2};dav.raw(server,"",raw);
+    if(failure==0)Storage.failClose=true;
+    if(failure==1)raw.totalSize=3;
+    if(failure==2)Storage.failRename="/book.epub.davtmp";
+    if(failure==3)Storage.failRename="/book.epub";
+    raw.status=RAW_END;dav.raw(server,"",raw);
+    EXPECT_FALSE(dav._putOk);EXPECT_EQ(Storage.data["/book.epub"],"old");EXPECT_TRUE(cleared.empty());
+  }
+}
+TEST(NetworkTransactions, PutSuccessAbortAndRepeatedStartOnlyCleanOwnedFiles) {
+  Storage={};cleared.clear();WebServer server;server.requestUri="/new.epub";WebDAVHandler dav;
+  HTTPRaw raw{RAW_START};dav.raw(server,"",raw);const uint8_t bytes[]={1,2};
+  raw={RAW_WRITE,bytes,2,2};dav.raw(server,"",raw);raw.status=RAW_END;dav.raw(server,"",raw);
+  EXPECT_TRUE(dav._putOk);EXPECT_EQ(Storage.data["/new.epub"],std::string("\x01\x02",2));EXPECT_EQ(cleared.size(),1U);
+  raw.status=RAW_START;dav.raw(server,"",raw);raw.status=RAW_ABORTED;dav.raw(server,"",raw);
+  EXPECT_EQ(Storage.data["/new.epub"],std::string("\x01\x02",2));EXPECT_FALSE(Storage.exists("/new.epub.davtmp"));
+  Storage.entries["/new.epub.davtmp"]=false;Storage.data["/new.epub.davtmp"]="recovery";
+  raw.status=RAW_START;dav.raw(server,"",raw);raw.status=RAW_ABORTED;dav.raw(server,"",raw);
+  EXPECT_EQ(Storage.data["/new.epub.davtmp"],"recovery");
+}
+TEST(NetworkTransactions, DeleteFailureDoesNotClearMetadataInWebOrDav) {
+  Storage={};cleared.clear();Storage.entries["/book.epub"]=false;Storage.failRemove="/book.epub";
+  EXPECT_FALSE(deletePaths({{String("/book.epub")}}));EXPECT_TRUE(cleared.empty());
+  WebDAVHandler dav;WebServer server;server.requestUri="/book.epub";dav.handleDelete(server);
+  EXPECT_EQ(server.status,500);EXPECT_TRUE(Storage.exists("/book.epub"));EXPECT_TRUE(cleared.empty());
+}
+TEST(NetworkTransactions, MoveRollbackPreservesBothFilesAndMetadata) {
+  Storage={};cleared.clear();Storage.entries["/a.epub"]=false;Storage.data["/a.epub"]="a";
+  Storage.entries["/b.epub"]=false;Storage.data["/b.epub"]="b";Storage.failRename="/a.epub";
+  WebDAVHandler dav;WebServer server;server.requestUri="/a.epub";server.destination="/b.epub";dav.handleMove(server);
+  EXPECT_EQ(server.status,500);EXPECT_EQ(Storage.data["/a.epub"],"a");EXPECT_EQ(Storage.data["/b.epub"],"b");EXPECT_TRUE(cleared.empty());
+}
+TEST(NetworkTransactions, CopyFailureKeepsExistingDestination) {
+  for(int failure=0;failure<4;++failure) {
+    Storage={};cleared.clear();allocationFails=failure==3;
+    Storage.entries["/a.epub"]=false;Storage.data["/a.epub"]="abc";Storage.entries["/b.epub"]=false;Storage.data["/b.epub"]="old";
+    if(failure==0)Storage.failRead=true;if(failure==1)Storage.writeLimit=0;if(failure==2)Storage.failClose=true;
+    WebDAVHandler dav;WebServer server;server.requestUri="/a.epub";server.destination="/b.epub";dav.handleCopy(server);
+    EXPECT_EQ(server.status,500);EXPECT_EQ(Storage.data["/b.epub"],"old");EXPECT_TRUE(cleared.empty());
+    EXPECT_FALSE(Storage.exists("/b.epub.davtmp"));allocationFails=false;
+  }
+}
+TEST(NetworkTransactions, CopyAndMoveSuccessReportActualCommit) {
+  Storage={};cleared.clear();Storage.entries["/a.epub"]=false;Storage.data["/a.epub"]="abc";
+  WebDAVHandler dav;WebServer server;server.requestUri="/a.epub";server.destination="/b.epub";dav.handleCopy(server);
+  EXPECT_EQ(server.status,201);EXPECT_EQ(Storage.data["/b.epub"],"abc");
+  server.destination="/c.epub";dav.handleMove(server);EXPECT_EQ(server.status,201);EXPECT_FALSE(Storage.exists("/a.epub"));EXPECT_EQ(Storage.data["/c.epub"],"abc");
+}
+
+TEST(NetworkTransactions, HttpUploadWriteCloseAbortAndCollisionPreserveOwnership) {
+  for(int failure=0;failure<5;++failure) {
+    Storage={};cleared.clear();CrossPointWebServer web;web.server->incoming.filename="upload.epub";
+    CrossPointWebServer::UploadState state;
+    if(failure==4){Storage.entries["/upload.epub"]=false;Storage.data["/upload.epub"]="old";}
+    web.handleUpload(state);
+    if(failure==4){web.handleUploadPost(state);EXPECT_EQ(Storage.data["/upload.epub"],"old");EXPECT_TRUE(cleared.empty());continue;}
+    ASSERT_TRUE(state.ownsFile);std::vector<uint8_t> bytes(4097,42);
+    if(failure==0)Storage.writeLimit=0;
+    if(failure==1)Storage.writeLimit=2;
+    web.server->incoming.status=UPLOAD_FILE_WRITE;web.server->incoming.buf=bytes.data();web.server->incoming.currentSize=bytes.size();web.handleUpload(state);
+    if(failure==2)Storage.failClose=true;
+    web.server->incoming.status=failure==3?UPLOAD_FILE_ABORTED:UPLOAD_FILE_END;web.handleUpload(state);web.handleUploadPost(state);
+    EXPECT_FALSE(state.success);EXPECT_FALSE(state.file.opened);EXPECT_FALSE(Storage.exists("/upload.epub"));EXPECT_TRUE(cleared.empty());
+  }
+}
+TEST(NetworkTransactions, HttpUploadSuccessAndDisconnectCleanup) {
+  for(bool disconnect:{false,true}) {
+    Storage={};cleared.clear();CrossPointWebServer web;web.server->incoming.filename="upload.epub";CrossPointWebServer::UploadState state;web.handleUpload(state);
+    const uint8_t data[]={1,2,3};web.server->incoming={"upload.epub",UPLOAD_FILE_WRITE,data,3};web.handleUpload(state);
+    web.server->connection.live=!disconnect;web.server->incoming.status=UPLOAD_FILE_END;web.handleUpload(state);web.handleUploadPost(state);
+    EXPECT_EQ(state.success,!disconnect);EXPECT_EQ(Storage.exists("/upload.epub"),!disconnect);EXPECT_EQ(cleared.empty(),disconnect);
+    if(!disconnect)EXPECT_EQ(Storage.data["/upload.epub"],std::string("\x01\x02\x03",3));
+  }
+}
+
+TEST(NetworkTransactions, FontCollisionOomAbortAndShortFileNeverRemoveExistingFont) {
+  for(int failure=0;failure<4;++failure) {
+    Storage={};allocationFails=false;CrossPointWebServer web;web.server->args["family"]="Ko";web.server->incoming.filename="Ko_14.cpfont";
+    const char* path="/.fonts/Ko/Ko_14.cpfont";
+    if(failure==0){Storage.entries[path]=false;Storage.data[path]="existing";Storage.entries[std::string(path)+".davbak"]=false;}
+    allocationFails=failure==1;web.handleFontUploadData();allocationFails=false;
+    if(failure==2){const uint8_t partial[]={1};web.server->incoming.status=UPLOAD_FILE_WRITE;web.server->incoming.buf=partial;web.server->incoming.currentSize=1;web.handleFontUploadData();}
+    web.server->incoming.status=failure==3?UPLOAD_FILE_ABORTED:UPLOAD_FILE_END;web.handleFontUploadData();
+    EXPECT_FALSE(web.fontUpload.valid);EXPECT_FALSE(web.fontUpload.ownsFile);EXPECT_FALSE(web.fontUpload.file.opened);
+    if(failure==0)EXPECT_EQ(Storage.data[path],"existing");else EXPECT_FALSE(Storage.exists(path));
+  }
+}
+TEST(NetworkTransactions, FontMagicAcrossChunksAndCloseFailure) {
+  for(bool failedClose:{false,true}) {
+    Storage={};CrossPointWebServer web;web.server->args["family"]="Ko";web.server->incoming.filename="Ko_14.cpfont";web.handleFontUploadData();
+    const uint8_t bytes[]={'C','P','F','O','N','T',0,0,4};
+    for(size_t i=0;i<sizeof(bytes);++i){web.server->incoming.status=UPLOAD_FILE_WRITE;web.server->incoming.buf=bytes+i;web.server->incoming.currentSize=1;web.handleFontUploadData();}
+    Storage.failClose=failedClose;web.server->incoming.status=UPLOAD_FILE_END;web.handleFontUploadData();
+    EXPECT_EQ(web.fontUpload.valid,!failedClose);EXPECT_EQ(Storage.exists("/.fonts/Ko/Ko_14.cpfont"),!failedClose);
+  }
+}
+
+TEST(NetworkTransactions, FontReplacementKeepsPreviousFileOnFailureAndPublishesAfterClose) {
+  for(bool fail:{false,true}) {
+    Storage={};CrossPointWebServer web;web.server->args["family"]="Ko";web.server->incoming.filename="Ko_14.cpfont";
+    const char* path="/.fonts/Ko/Ko_14.cpfont";Storage.entries[path]=false;Storage.data[path]="existing";web.handleFontUploadData();
+    const uint8_t bytes[]={'C','P','F','O','N','T',0,0,4};web.server->incoming.status=UPLOAD_FILE_WRITE;web.server->incoming.buf=bytes;web.server->incoming.currentSize=sizeof(bytes);web.handleFontUploadData();
+    if(fail)Storage.failRename=std::string(path)+".davtmp";
+    web.server->incoming.status=UPLOAD_FILE_END;web.handleFontUploadData();
+    EXPECT_EQ(web.fontUpload.valid,!fail);if(fail)EXPECT_EQ(Storage.data[path],"existing");else EXPECT_EQ(Storage.data[path].size(),sizeof(bytes));
+  }
+}
+
+TEST(NetworkTransactions, WebdavDestructionClosesAndRemovesOnlyOwnedPartialFile) {
+ Storage={};{ WebDAVHandler dav;WebServer server;server.requestUri="/book.epub";HTTPRaw raw{RAW_START};dav.raw(server,"",raw);ASSERT_TRUE(dav._putFile.opened); }
+ EXPECT_FALSE(Storage.exists("/book.epub.davtmp"));
+ Storage.entries["/book.epub.davtmp"]=false;Storage.data["/book.epub.davtmp"]="recovery";
+ {WebDAVHandler dav;WebServer server;server.requestUri="/book.epub";HTTPRaw raw{RAW_START};dav.raw(server,"",raw);EXPECT_FALSE(dav._putOk);}
+ EXPECT_EQ(Storage.data["/book.epub.davtmp"],"recovery");
+}
+
+TEST(NetworkReview, PutFinalHandlerNeverDeletesUnownedRecoveryAndConsumesCommitOnce) {
+  Storage={};cleared.clear();Storage.entries["/book.epub.davtmp"]=false;Storage.data["/book.epub.davtmp"]="recovery";
+  WebDAVHandler dav;WebServer server;server.requestUri="/book.epub";HTTPRaw raw{RAW_START};dav.raw(server,"",raw);
+  const uint8_t data[]={1};raw={RAW_WRITE,data,1,1};dav.raw(server,"",raw);raw.status=RAW_END;dav.raw(server,"",raw);dav.handlePut(server);
+  EXPECT_EQ(server.status,500);EXPECT_EQ(Storage.data["/book.epub.davtmp"],"recovery");EXPECT_TRUE(cleared.empty());
+  Storage={};server.requestUri="/ok.epub";raw={RAW_START};dav.raw(server,"",raw);raw={RAW_WRITE,data,1,1};dav.raw(server,"",raw);raw.status=RAW_END;dav.raw(server,"",raw);
+  dav.handlePut(server);EXPECT_EQ(server.status,201);EXPECT_EQ(cleared.size(),1U);
+  dav.handlePut(server);EXPECT_EQ(server.status,500);EXPECT_EQ(cleared.size(),1U);
+}
+TEST(NetworkReview, CopyAndMoveRejectExistingDirectoryWithoutMovingOrDeletingItsTree) {
+  for(bool move:{false,true}) {
+    Storage={};cleared.clear();Storage.entries["/a.epub"]=false;Storage.data["/a.epub"]="a";
+    Storage.entries["/books"]=true;Storage.entries["/books/child.epub"]=false;Storage.data["/books/child.epub"]="child";
+    WebDAVHandler dav;WebServer server;server.requestUri="/a.epub";server.destination="/books";
+    if(move)dav.handleMove(server);else dav.handleCopy(server);
+    EXPECT_GE(server.status,400);EXPECT_TRUE(Storage.entries.at("/books"));EXPECT_EQ(Storage.data["/books/child.epub"],"child");
+    EXPECT_EQ(Storage.data["/a.epub"],"a");EXPECT_FALSE(Storage.exists("/books.davbak"));EXPECT_TRUE(cleared.empty());
+    EXPECT_TRUE(std::none_of(Storage.mutations.begin(),Storage.mutations.end(),[](const auto& op){return op.starts_with("rename:");}));
+  }
+}
+TEST(NetworkReview, AllDepthShortAliasesAreRejectedBeforeEndpointAccess) {
+  for(auto path:{"/Books/Novel/BOOKEP~1.DAV","/Books/Novel/HIDDEN~1","/Books/Novel/DEEP/BOOKEP~2.DAV"}) {
+    Storage={};WebServer server;server.requestUri=path;WebDAVHandler dav;dav.handleDelete(server);
+    EXPECT_EQ(server.status,403);EXPECT_TRUE(Storage.probes.empty());EXPECT_TRUE(Storage.reads.empty());EXPECT_TRUE(Storage.mutations.empty());
+    CrossPointWebServer web;web.server->args["path"]=path;web.handleDownload();EXPECT_EQ(web.server->status,403);EXPECT_TRUE(Storage.reads.empty());
+  }
+}
+TEST(NetworkReview, PropfindFiltersEveryProtectedChildWithSharedPolicy) {
+  Storage={};Storage.entries["/Books"]=true;
+  for(auto name:{"ok.epub","a.davtmp","a.DAVBAK","XTCache","xtCACHE",".secret","BOOKEP~1.DAV"})Storage.entries[std::string("/Books/")+name]=false;
+  WebServer server;server.requestUri="/Books";WebDAVHandler dav;dav.handlePropfind(server);
+  EXPECT_EQ(server.status,207);EXPECT_EQ(dav.listed,(std::vector<std::string>{"/Books","/Books/ok.epub"}));
+}
+TEST(NetworkReview, WebMoveRejectsProtectedDestinationBeforeAnyStorageProbe) {
+  for(int shape=0;shape<3;++shape) {
+    Storage={};Storage.entries["/Books/a.epub"]=false;
+    if(shape)Storage.entries["/Books/.secret/inner"]=shape==2;
+    CrossPointWebServer web;web.server->args={{"path","/Books/a.epub"},{"dest","/Books/.secret/inner"}};web.handleMove();
+    EXPECT_EQ(web.server->status,403);EXPECT_TRUE(Storage.probes.empty());EXPECT_TRUE(Storage.reads.empty());EXPECT_TRUE(Storage.mutations.empty());
+  }
+}
+TEST(NetworkReview, RequiredSettingsAssetsAreRegisteredAndServed) {
+  CrossPointWebServer web;web.registerAssets();
+  for(auto entry:{std::pair{"/assets/web.css","text/css"},std::pair{"/assets/icons.svg","image/svg+xml"},std::pair{"/assets/crosspoint-icon.svg","image/svg+xml"}}) {
+    ASSERT_TRUE(web.server->handlers.contains(entry.first));web.server->handlers.at(entry.first)();
+    EXPECT_EQ(web.server->status,200);EXPECT_GT(staticResponseSize,0U);EXPECT_EQ(staticResponseMime,entry.second);
+  }
+}
+
+TEST(NetworkReview, DestinationReadHandleAllocationFailureHasNoFileOrMetadataSideEffect) {
+ Storage={};cleared.clear();Storage.entries["/a.epub"]=false;Storage.data["/a.epub"]="a";
+ Storage.entries["/b.epub"]=false;Storage.data["/b.epub"]="b";Storage.readHandleFails=true;
+ EXPECT_FALSE(commitNetworkFile("/a.epub","/b.epub"));EXPECT_EQ(Storage.data["/a.epub"],"a");EXPECT_EQ(Storage.data["/b.epub"],"b");
+ EXPECT_TRUE(Storage.mutations.empty());EXPECT_TRUE(cleared.empty());EXPECT_FALSE(Storage.exists("/b.epub.davbak"));
 }

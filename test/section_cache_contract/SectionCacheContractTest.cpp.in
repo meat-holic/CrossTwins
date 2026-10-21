@@ -1,0 +1,230 @@
+#include <HalStorage.h>
+#include <ReaderRenderSpec.h>
+#include <Serialization.h>
+#include <gtest/gtest.h>
+
+#include <algorithm>
+#include <array>
+#include <chrono>
+#include <filesystem>
+#include <memory>
+#include <optional>
+#include <map>
+#include <vector>
+#ifdef _WIN32
+#include <process.h>
+#else
+#include <unistd.h>
+#endif
+#define LOG_ERR(...) ((void)0)
+#define LOG_DBG(...) ((void)0)
+@VERSIONS@
+struct Section {
+  std::string filePath;
+  HalFile file;
+  uint16_t pageCount = 0, partialPageCount_ = 0, builtPageCount_ = 0;
+  uint32_t partialBytesConsumed_ = 0, partialTotalBytes_ = 0;
+  bool partial_ = false;
+  struct Entry {
+    uint32_t fileOffset;
+    uint16_t paragraphIndex, listItemIndex;
+    uint32_t visibleTextOffset;
+  };
+  struct Parser {
+    std::map<std::string, uint16_t> anchors;
+    const auto& getAnchors() const { return anchors; }
+  };
+  struct Build { std::vector<Entry> lut; std::unique_ptr<Parser> parser; };
+  std::unique_ptr<Build> build_;
+  std::string binTmpPath() const { return filePath + ".part"; }
+  bool writeSectionFileHeader(const ReaderRenderSpec&);
+  bool loadSectionFile(const ReaderRenderSpec&);
+  bool clearCache() const;
+  std::optional<uint16_t> getCachedPageCount() const;
+  std::optional<uint16_t> getPageForVisibleTextOffset(uint32_t, bool = false) const;
+  bool commitBuildFile(uint8_t, uint32_t, uint32_t);
+};
+@WRITE_HEADER@
+@LOAD@
+@CLEAR@
+@COUNT@
+@VISIBLE@
+@COMMIT@
+
+class SectionCacheContract : public testing::Test {
+ protected:
+  Section section;
+  ReaderRenderSpec spec;
+  std::filesystem::path directory;
+  bool owns = false;
+  void SetUp() override {
+#ifdef _WIN32
+    const auto pid = _getpid();
+#else
+    const auto pid = getpid();
+#endif
+    directory = std::filesystem::temp_directory_path() /
+                ("ct-section-schema-" + std::to_string(pid) + "-" +
+                 std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + "-" +
+                 testing::UnitTest::GetInstance()->current_test_info()->name());
+    owns = std::filesystem::create_directory(directory);
+    ASSERT_TRUE(owns);
+    section.filePath = (directory / "section.bin").string();
+    spec.viewportWidth = 400;
+    spec.viewportHeight = 600;
+  }
+  void TearDown() override {
+    HalFileTest::failNextWrite = HalFileTest::failNextClose = false;
+    section.file.close();
+    if (!owns) return;
+    std::filesystem::remove(section.filePath);
+    std::filesystem::remove(section.binTmpPath());
+    EXPECT_TRUE(std::filesystem::remove(directory));
+  }
+  void write(const uint8_t version, const std::vector<uint32_t>& offsets) {
+    section.pageCount = static_cast<uint16_t>(offsets.size());
+    ASSERT_TRUE(section.file.open(section.filePath.c_str(), "wb"));
+    ASSERT_TRUE(section.writeSectionFileHeader(spec));
+    EXPECT_EQ(section.file.position(), 44u);
+    // LUT payload fixture: header + padding + visible-offset LUT + partial watermark.
+    const std::array<uint8_t, 16> padding{};
+    section.file.write(padding.data(), padding.size());
+    const uint32_t visible = static_cast<uint32_t>(section.file.position());
+    for (const auto offset : offsets) serialization::writePod(section.file, offset);
+    serialization::writePod(section.file, uint32_t{200});
+    serialization::writePod(section.file, uint32_t{1000});
+    ASSERT_TRUE(section.file.seek(HEADER_SIZE - 2 * sizeof(uint32_t)));
+    serialization::writePod(section.file, visible - 4);
+    serialization::writePod(section.file, visible);
+    ASSERT_TRUE(section.file.seek(0));
+    serialization::writePod(section.file, version);
+    section.file.close();
+  }
+  void beginCommit() {
+    section.file.limitWritesTo(SIZE_MAX);
+    ASSERT_TRUE(section.file.open(section.binTmpPath().c_str(), "wb"));
+    ASSERT_TRUE(section.writeSectionFileHeader(spec));
+    const std::array<uint8_t, 8> pages{};
+    ASSERT_EQ(section.file.write(pages.data(), pages.size()), pages.size());
+    section.build_ = std::make_unique<Section::Build>();
+    section.build_->parser = std::make_unique<Section::Parser>();
+    section.build_->parser->anchors.emplace("note", 1);
+    section.build_->lut = {{44, 0, 0, 0}, {48, 1, 0, 10}};
+    section.builtPageCount_ = 2;
+  }
+};
+
+TEST_F(SectionCacheContract, FinalHeaderRoundTripAndKnownPageCount) {
+  write(SECTION_FILE_VERSION, {0, 10, 10, 20});
+  ASSERT_TRUE(section.loadSectionFile(spec));
+  EXPECT_EQ(section.pageCount, 4);
+  EXPECT_FALSE(section.partial_);
+  EXPECT_EQ(section.getCachedPageCount(), 4);
+}
+TEST_F(SectionCacheContract, PartialWatermarkIsNotAFinalChapterTotal) {
+  write(SECTION_FILE_PARTIAL_VERSION, {0, 10, 10, 20});
+  ASSERT_TRUE(section.loadSectionFile(spec));
+  EXPECT_TRUE(section.partial_);
+  EXPECT_EQ(section.partialPageCount_, 4);
+  EXPECT_EQ(section.partialBytesConsumed_, 200u);
+  EXPECT_EQ(section.partialTotalBytes_, 1000u);
+  EXPECT_EQ(section.getCachedPageCount(), std::nullopt);
+  EXPECT_EQ(section.getPageForVisibleTextOffset(21), std::nullopt);
+}
+TEST_F(SectionCacheContract, IndentationAndExtraSpacingIndependentlyInvalidate) {
+  for (const bool spacing : {false, true}) {
+    for (const uint8_t indent : {uint8_t{0}, uint8_t{2}, uint8_t{4}}) {
+      spec.extraParagraphSpacing = spacing;
+      spec.paragraphIndentSpaces = indent;
+      write(SECTION_FILE_VERSION, {0, 10});
+      ASSERT_TRUE(section.loadSectionFile(spec));
+      auto other = spec;
+      other.extraParagraphSpacing = !spacing;
+      EXPECT_FALSE(section.loadSectionFile(other));
+      EXPECT_FALSE(std::filesystem::exists(section.filePath));
+      write(SECTION_FILE_VERSION, {0, 10});
+      other = spec;
+      other.paragraphIndentSpaces = indent + 1;
+      EXPECT_FALSE(section.loadSectionFile(other));
+    }
+  }
+}
+TEST_F(SectionCacheContract, VisibleOffsetTiesAndBatchBoundaryKeepResumeSemantics) {
+  std::vector<uint32_t> offsets;
+  for (uint32_t i = 0; i < 70; ++i) offsets.push_back(i / 2 * 10);
+  write(SECTION_FILE_VERSION, offsets);
+  EXPECT_EQ(section.getPageForVisibleTextOffset(150), 31);
+  EXPECT_EQ(section.getPageForVisibleTextOffset(150, true), 30);
+  EXPECT_EQ(section.getPageForVisibleTextOffset(160), 33);
+  EXPECT_EQ(section.getPageForVisibleTextOffset(160, true), 32);
+  EXPECT_EQ(section.getPageForVisibleTextOffset(99999), 69);
+}
+TEST_F(SectionCacheContract, TruncatedVisibleLutAndPartialTrailerFailSafely) {
+  write(SECTION_FILE_VERSION, {0, 10, 20, 30});
+  std::filesystem::resize_file(section.filePath, 60 + 3 * sizeof(uint32_t));
+  EXPECT_EQ(section.getPageForVisibleTextOffset(20), std::nullopt);
+  write(SECTION_FILE_PARTIAL_VERSION, {0, 10, 20, 30});
+  std::filesystem::resize_file(section.filePath, 60 + 4 * sizeof(uint32_t));
+  EXPECT_FALSE(section.loadSectionFile(spec));
+  EXPECT_EQ(section.pageCount, 0);
+  EXPECT_FALSE(std::filesystem::exists(section.filePath));
+}
+TEST_F(SectionCacheContract, ReloadClearsOldPartialAndFailedLoadMetadata) {
+  write(SECTION_FILE_PARTIAL_VERSION, {0, 10});
+  ASSERT_TRUE(section.loadSectionFile(spec));
+  EXPECT_TRUE(section.partial_);
+  write(SECTION_FILE_VERSION, {0, 10});
+  ASSERT_TRUE(section.loadSectionFile(spec));
+  EXPECT_FALSE(section.partial_);
+  EXPECT_EQ(section.partialTotalBytes_, 0u);
+  write(64, {0, 10});
+  EXPECT_FALSE(section.loadSectionFile(spec));
+  EXPECT_EQ(section.pageCount, 0);
+  EXPECT_EQ(section.partialPageCount_, 0);
+}
+TEST_F(SectionCacheContract, WrappedPartialTrailerOffsetIsRejected) {
+  write(SECTION_FILE_PARTIAL_VERSION, {0, 10});
+  {
+    HalFile file;
+    ASSERT_TRUE(file.open(section.filePath.c_str(), "r+b"));
+    ASSERT_TRUE(file.seek(HEADER_SIZE - sizeof(uint32_t)));
+    serialization::writePod(file, uint32_t{0xFFFFFFFC});
+  }
+  EXPECT_FALSE(section.loadSectionFile(spec));
+  EXPECT_FALSE(std::filesystem::exists(section.filePath));
+}
+TEST_F(SectionCacheContract, ProductionCommitFinalAndPartialRoundTrip) {
+  for (const uint8_t version : {SECTION_FILE_VERSION, SECTION_FILE_PARTIAL_VERSION}) {
+    beginCommit();
+    ASSERT_TRUE(section.commitBuildFile(version, 200, 1000));
+    section.build_.reset();
+    ASSERT_TRUE(section.loadSectionFile(spec));
+    EXPECT_EQ(section.pageCount, 2);
+    EXPECT_EQ(section.partial_, version == SECTION_FILE_PARTIAL_VERSION);
+    EXPECT_EQ(section.getPageForVisibleTextOffset(10, true), 1);
+    EXPECT_FALSE(std::filesystem::exists(section.binTmpPath()));
+  }
+}
+TEST_F(SectionCacheContract, CommitShortWritesNeverReplaceTheOldCache) {
+  write(SECTION_FILE_VERSION, {0, 10, 20, 30});
+  for (const size_t limit : {0u, 1u, 10u, 25u, 40u, 60u}) {
+    beginCommit();
+    section.file.limitWritesTo(limit);
+    EXPECT_FALSE(section.commitBuildFile(SECTION_FILE_VERSION, 200, 1000)) << limit;
+    EXPECT_FALSE(std::filesystem::exists(section.binTmpPath()));
+    EXPECT_EQ(section.getCachedPageCount(), 4);
+  }
+}
+TEST_F(SectionCacheContract, CommitCloseFailureNeverReplacesTheOldCache) {
+  write(SECTION_FILE_VERSION, {0, 10, 20, 30});
+  beginCommit();
+  HalFileTest::failNextClose = true;
+  EXPECT_FALSE(section.commitBuildFile(SECTION_FILE_VERSION, 200, 1000));
+  EXPECT_EQ(section.getCachedPageCount(), 4);
+  EXPECT_FALSE(std::filesystem::exists(section.binTmpPath()));
+}
+TEST_F(SectionCacheContract, HeaderShortWriteIsReportedBeforeBuildStarts) {
+  ASSERT_TRUE(section.file.open(section.binTmpPath().c_str(), "wb"));
+  section.file.limitWritesTo(10);
+  EXPECT_FALSE(section.writeSectionFileHeader(spec));
+}

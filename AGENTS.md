@@ -1,4 +1,4 @@
-# CrossPoint Reader Development Guide
+# CrossTwins Development Guide
 
 ## Repository Identity and Scope
 
@@ -102,3 +102,12 @@ git status --short
 - Commit only when explicitly requested. Never push, open or merge a PR, or deploy firmware without explicit authorization. Inspect the configured remotes again before an approved push; do not infer a remote name or target.
 - Do not add assistant self-attribution or generated-by trailers to commits.
 - CrossTwins Slack, iCloud, and Notion workflows are not automatic. Do not post messages or upload reports/builds unless the active request asks. Archive reusable prompts to Notion only when explicitly requested. External messages do not authorize code changes, commits, pushes, branch/worktree operations, or device deployment.
+
+
+## Experimental 2.0.0rc integration
+
+- `experiment/upstream-2.0.0rc` is a merge-in-progress integration worktree. Preserve stable CT.7 and its SDK pin.
+- The integration SDK pin is `7f0f20202baf26cad5fd32862b6fc1387467a741`; this is not a stable release declaration.
+- Official release build profiles remain X3/X4, Sticky, X4 Pro, X4 Classic, and Paper Mono. Only Korean and English are compiled.
+- Preserve CT typed EPUB caches (final128/partial154), cpfont4 and on-demand TXT byte-offset resume. Plugin, clipping, LCP, GIF and TXT-to-HTML features are not adopted.
+- Slice 10A records root host tests and full firmware build attempts. Independent review is Slice 10B and hardware validation remains separate. Do not publish or commit without explicit approval.

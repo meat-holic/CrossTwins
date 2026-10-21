@@ -1,0 +1,187 @@
+#include <FontPsram.h>
+#include <GfxRenderer.h>
+#include <SdCardFont.h>
+#include <SdCardFontManager.h>
+#include <SdCardFontRegistry.h>
+#include <gtest/gtest.h>
+
+#include <algorithm>
+#include <cstdlib>
+#include <memory>
+#include <new>
+#include <string>
+#include <vector>
+#define LOG_ERR(...) ((void)0)
+inline GfxRenderer* ownerUnderTest = nullptr;
+inline bool failFontObject = false;
+void* operator new(size_t size, const std::nothrow_t&) noexcept {
+  if (failFontObject && size == sizeof(SdCardFont)) {
+    failFontObject = false;
+    return nullptr;
+  }
+  return ::operator new(size);
+}
+SdCardFont::~SdCardFont() {
+  if (!ownerUnderTest) return;
+  for (const auto& [id, font] : ownerUnderTest->sdCardFonts_) EXPECT_NE(font, this);
+  for (const auto& [id, font] : ownerUnderTest->fontMap) EXPECT_NE(font.getData(), &data);
+}
+@RENDERER_METHODS@
+@REGISTRY_METHODS@
+SdCardFontFamilyInfo makeFamily(const char* name = "Korean") {
+  return {name, {{"fixture12", 12, 0}, {"fixture16", 16, 0}}, false};
+}
+TEST(FontOwnership, DestructorUnregistersBeforeDestroyingStorage) {
+  GfxRenderer renderer;
+  ownerUnderTest = &renderer;
+  {
+    SdCardFontManager manager;
+    auto family = makeFamily();
+    ASSERT_TRUE(manager.loadFamily(family, renderer, 14));
+    const int id = manager.getFontId(family.name);
+    EXPECT_NE(id, 0);
+    EXPECT_EQ(manager.currentPointSize(), 12);
+    renderer.fallbackFontMap_[777] = id;
+    renderer.fallbackFontMap_[id] = 888;
+    renderer.sdCardFontScales_[id] = 256;
+  }
+  EXPECT_TRUE(renderer.fontMap.empty());
+  EXPECT_TRUE(renderer.sdCardFonts_.empty());
+  EXPECT_TRUE(renderer.fallbackFontMap_.empty());
+  EXPECT_TRUE(renderer.sdCardFontScales_.empty());
+  ownerUnderTest = nullptr;
+}
+TEST(FontOwnership, RepeatedFamilyLoadHasStableIdsAndIdempotentUnload) {
+  GfxRenderer renderer;
+  ownerUnderTest = &renderer;
+  SdCardFontManager manager;
+  auto family = makeFamily();
+  int first = 0;
+  for (int i = 0; i < 10; ++i) {
+    ASSERT_TRUE(manager.loadFamily(family, renderer, 16));
+    if (!first) first = manager.getFontId(family.name);
+    EXPECT_EQ(manager.getFontId(family.name), first);
+    EXPECT_EQ(renderer.sdCardFonts_.size(), 1U);
+    manager.unloadAll(renderer);
+    manager.unloadAll(renderer);
+    EXPECT_EQ(manager.getFontId(family.name), 0);
+    EXPECT_TRUE(renderer.fontMap.empty());
+  }
+  ownerUnderTest = nullptr;
+}
+TEST(FontOwnership, AllocationAndLoadFailuresNeverPublishBorrowedPointers) {
+  GfxRenderer renderer;
+  ownerUnderTest = &renderer;
+  SdCardFontManager manager;
+  auto family = makeFamily();
+  failFontObject = true;
+  EXPECT_FALSE(manager.loadFamily(family, renderer, 12));
+  EXPECT_FALSE(failFontObject);
+  SdCardFont::failLoad = true;
+  EXPECT_FALSE(manager.loadFamily(family, renderer, 12));
+  SdCardFont::failLoad = false;
+  EXPECT_TRUE(renderer.fontMap.empty());
+  EXPECT_TRUE(renderer.sdCardFonts_.empty());
+  EXPECT_TRUE(manager.loadFamily(family, renderer, 12));
+  manager.unloadAll(renderer);
+  ownerUnderTest = nullptr;
+}
+TEST(FontOwnership, RemovingOneIdDoesNotDropUnrelatedFallbacks) {
+  GfxRenderer renderer;
+  renderer.fallbackFontMap_ = {{1, 7}, {7, 2}, {3, 8}};
+  renderer.ttfFonts_[7] = nullptr;
+  renderer.removeFont(7);
+  EXPECT_EQ(renderer.fallbackFontMap_.size(), 1U);
+  EXPECT_EQ(renderer.fallbackFontMap_.at(3), 8);
+  EXPECT_TRUE(renderer.ttfFonts_.empty());
+}
+struct SourceFile {
+  bool opened = false;
+  explicit operator bool() const { return opened; }
+  void close() {
+    EXPECT_TRUE(opened);
+    opened = false;
+  }
+};
+class TtfEpdFont {
+ public:
+  static inline void (*destroyCheck)() = nullptr;
+  ~TtfEpdFont() {
+    if (destroyCheck) destroyCheck();
+  }
+};
+struct SdCardFontSystem {
+  struct Source {
+    std::vector<uint8_t> bytes;
+    SourceFile file;
+    bool streamed = false;
+    size_t size = 0;
+    bool present = false;
+  };
+  Source ttfSources_[4];
+  std::unique_ptr<TtfEpdFont> ttf_;
+  std::string ttfFamily_;
+  int ttfFontId_ = 0;
+  uint8_t ttfPointSize_ = 0;
+  void freeTtfSources();
+  void unloadTtf(GfxRenderer&);
+};
+@TTF_CLEANUP@
+inline SdCardFontSystem* ttfSystemUnderTest = nullptr;
+inline bool ttfDestroyed = false;
+TEST(FontOwnership, TtfViewsDetachBeforeFaceAndSourcesAreDestroyed) {
+  GfxRenderer renderer;
+  SdCardFontSystem system;
+  ownerUnderTest = &renderer;
+  ttfSystemUnderTest = &system;
+  system.ttfFamily_ = "FixtureTTF";
+  system.ttfFontId_ = 9;
+  system.ttfPointSize_ = 16;
+  system.ttfSources_[0].bytes = {0, 1, 0, 0};
+  system.ttfSources_[0].file.opened = true;
+  system.ttfSources_[0].present = true;
+  system.ttfSources_[0].size = 4;
+  system.ttf_ = std::make_unique<TtfEpdFont>();
+  renderer.ttfFonts_[9] = system.ttf_.get();
+  EpdFontData data{};
+  EpdFont view{&data};
+  renderer.insertFont(9, EpdFontFamily{&view});
+  renderer.fallbackFontMap_[777] = 9;
+  ttfDestroyed = false;
+  TtfEpdFont::destroyCheck = [] {
+    EXPECT_TRUE(ownerUnderTest->ttfFonts_.empty());
+    EXPECT_EQ(ownerUnderTest->fontMap.count(9), 0U);
+    EXPECT_TRUE(ownerUnderTest->fallbackFontMap_.empty());
+    EXPECT_TRUE(ttfSystemUnderTest->ttfSources_[0].file.opened);
+    EXPECT_EQ(ttfSystemUnderTest->ttfSources_[0].bytes.size(), 4U);
+    ttfDestroyed = true;
+  };
+  system.unloadTtf(renderer);
+  EXPECT_TRUE(ttfDestroyed);
+  EXPECT_FALSE(system.ttfSources_[0].file.opened);
+  EXPECT_TRUE(system.ttfSources_[0].bytes.empty());
+  EXPECT_TRUE(system.ttfFamily_.empty());
+  EXPECT_EQ(system.ttfFontId_, 0);
+  system.unloadTtf(renderer);
+  TtfEpdFont::destroyCheck = nullptr;
+  ownerUnderTest = nullptr;
+  ttfSystemUnderTest = nullptr;
+}
+
+TEST(FontOwnership, IdCollisionKeepsExistingRendererEntry) {
+  GfxRenderer renderer;
+  ownerUnderTest = &renderer;
+  SdCardFontManager manager;
+  const auto family = makeFamily();
+  ASSERT_TRUE(manager.loadFamily(family, renderer, 12));
+  const int id = manager.getFontId(family.name);
+  manager.unloadAll(renderer);
+  EpdFontData builtin{};
+  EpdFont view{&builtin};
+  renderer.insertFont(id, EpdFontFamily{&view});
+  EXPECT_FALSE(manager.loadFamily(family, renderer, 12));
+  EXPECT_EQ(renderer.getFontMap().at(id).getData(), &builtin);
+  EXPECT_TRUE(renderer.sdCardFonts_.empty());
+  EXPECT_EQ(manager.getFontId(family.name), 0);
+  ownerUnderTest = nullptr;
+}

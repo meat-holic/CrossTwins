@@ -38,6 +38,45 @@ target_compile_options(crosspoint_test_common INTERFACE
 enable_testing()
 include(GoogleTest)
 
+# Production fragments used by the reviewed Slice 4-9 regression suites.
+function(production_slice out file begin end)
+  file(READ "${REPO_ROOT}/${file}" text)
+  string(REPLACE "\r\n" "\n" text "${text}")
+  string(FIND "${text}" "${begin}" start)
+  if(start LESS 0)
+    message(FATAL_ERROR "Missing production slice ${file}: ${begin}")
+  endif()
+  string(SUBSTRING "${text}" ${start} -1 rest)
+  string(FIND "${rest}" "${end}" length)
+  if(length LESS 0)
+    message(FATAL_ERROR "Missing production slice end ${file}: ${end}")
+  endif()
+  string(SUBSTRING "${rest}" 0 ${length} result)
+  set(${out} "${result}" PARENT_SCOPE)
+  set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${REPO_ROOT}/${file}")
+endfunction()
+find_package(EXPAT REQUIRED)
+add_library(expat ALIAS EXPAT::EXPAT)
+find_path(SETTINGS_JSON_INCLUDE ArduinoJson.h
+  HINTS "${REPO_ROOT}/.pio/libdeps/default/ArduinoJson/src"
+        "${REPO_ROOT}/.pio/libdeps/gh_release_rc/ArduinoJson/src")
+if(NOT SETTINGS_JSON_INCLUDE)
+  # CI's host job runs before firmware dependencies are installed. Fetch the
+  # same pinned headers rather than depending on a local PlatformIO cache.
+  FetchContent_Declare(arduinojson
+    GIT_REPOSITORY https://github.com/bblanchon/ArduinoJson.git
+    GIT_TAG v7.4.2
+    SOURCE_SUBDIR no-build)
+  FetchContent_MakeAvailable(arduinojson)
+  set(SETTINGS_JSON_INCLUDE "${arduinojson_SOURCE_DIR}/src")
+endif()
+file(STRINGS "${SETTINGS_JSON_INCLUDE}/ArduinoJson/version.hpp" SETTINGS_JSON_VERSION
+  REGEX "^#define ARDUINOJSON_VERSION \"7\\.4\\.2\"$")
+if(NOT SETTINGS_JSON_VERSION)
+  message(FATAL_ERROR "Settings tests require the firmware's ArduinoJson 7.4.2 headers")
+endif()
+
+
 add_subdirectory(streaming_json_parser)
 add_subdirectory(release_json_parser)
 add_subdirectory(differential_rounding)
@@ -101,3 +140,40 @@ add_test(NAME RemoteButtonInputIntegration COMMAND ${CMAKE_COMMAND} -E env "CXX=
 add_test(NAME BleBuildVersion COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_ble_build_version.py)
 add_test(NAME BleControllerLink COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_ble_controller.py)
 add_test(NAME BleBondedReconnect COMMAND ${CMAKE_COMMAND} -E env "CXX=${CMAKE_CXX_COMPILER}" ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_ble_reconnect.py)
+add_test(NAME I18nGenerationAndRuntime COMMAND ${CMAKE_COMMAND} -E env
+  "CXX=${CMAKE_CXX_COMPILER}" "I18N_TEST_ARDUINOJSON_INCLUDE=${SETTINGS_JSON_INCLUDE}"
+  ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_i18n.py)
+add_test(NAME BleSettingsFailureBoundary COMMAND ${CMAKE_COMMAND} -E env
+  "CXX=${CMAKE_CXX_COMPILER}" ${Python3_EXECUTABLE}
+  ${CMAKE_CURRENT_SOURCE_DIR}/test_ble_settings_failure.py)
+
+add_subdirectory(opds_feed_error)
+
+add_subdirectory(em_dash_line_breaking)
+
+add_subdirectory(book_metadata_cache)
+
+add_subdirectory(button_press_navigation)
+
+add_subdirectory(zip_file)
+
+add_subdirectory(css_low_heap)
+
+add_subdirectory(section_cache_contract)
+
+add_subdirectory(sd_font_lifecycle)
+
+add_subdirectory(settings_contract)
+
+add_subdirectory(reader_txt_integration)
+
+add_subdirectory(reader_ui_contract)
+
+add_subdirectory(network_contract)
+add_subdirectory(opds_ct_contract)
+add_subdirectory(integration_remediation)
+add_test(NAME ReleaseWorkflowContracts
+  COMMAND ${Python3_EXECUTABLE} -m unittest discover -s scripts -p test_release_workflow_contracts.py)
+set_tests_properties(ReleaseWorkflowContracts PROPERTIES WORKING_DIRECTORY "${REPO_ROOT}")
+
+# Excluded-feature suites: txt_to_html, gif_support, clipping_*, reader_session, plugin_*.

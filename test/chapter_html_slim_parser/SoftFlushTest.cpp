@@ -201,4 +201,28 @@ TEST(EpubSoftFlush, ColdAndSerializedWarmPageHaveIdenticalLayoutAndFootnotes) {
   file.close();
   std::filesystem::remove(path);
 }
+TEST(EpubBlockBoundary, PendingWordKeepsItsOriginalParagraphAndStyle) {
+  for (const char* tag : {"h3", "div", "p", "blockquote"}) {
+    for (const char* word : {"before", "한국어"}) {
+      Fixture f;
+      f.parser.viewportWidth = 400;
+      ChapterHtmlSlimParser::characterData(&f.parser, word, static_cast<int>(std::strlen(word)));
+      ASSERT_GT(f.parser.partWordBufferIndex, 0);
+      ChapterHtmlSlimParser::startElement(&f.parser, tag, nullptr);
+      EXPECT_EQ(f.parser.partWordBufferIndex, 0) << tag;
+      ChapterHtmlSlimParser::characterData(&f.parser, "after", 5);
+      ChapterHtmlSlimParser::endElement(&f.parser, tag);
+      f.finish();
+      ASSERT_NE(f.parser.currentPage, nullptr);
+      const auto lines = snapshot(*f.parser.currentPage);
+      ASSERT_EQ(lines.size(), 2u) << tag;
+      ASSERT_EQ(std::get<2>(lines[0]).size(), 1u);
+      EXPECT_EQ(std::get<2>(lines[0])[0].first, word);
+      ASSERT_EQ(std::get<2>(lines[1]).size(), 1u);
+      EXPECT_EQ(std::get<2>(lines[1])[0].first, "after");
+      const auto& first = static_cast<const PageLine&>(*f.parser.currentPage->elements[0]);
+      EXPECT_EQ(first.getBlock()->wordStyle(0), EpdFontFamily::REGULAR);
+    }
+  }
+}
 }  // namespace

@@ -1,6 +1,7 @@
 #include "KOReaderCredentialStore.h"
 
 #include <Logging.h>
+#include <HalStorage.h>
 #include <MD5Builder.h>
 #include <ObfuscationUtils.h>
 
@@ -15,7 +16,7 @@ constexpr char DEFAULT_SERVER_URL[] = "https://sync.crosspointreader.com";
 constexpr char LEGACY_DEFAULT_SERVER_URL[] = "https://sync.koreader.rocks:443";
 
 // Bumped when a change to defaults would alter behavior for existing configs.
-constexpr uint8_t CONFIG_VERSION = 2;
+constexpr uint8_t CONFIG_VERSION = 3;
 }  // namespace
 
 void KOReaderCredentialStore::toJson(JsonDocument& doc) const {
@@ -23,9 +24,17 @@ void KOReaderCredentialStore::toJson(JsonDocument& doc) const {
   doc["username"] = getUsername();
   doc["password_obf"] = obfuscation::obfuscateToBase64(getPassword());
   doc["serverUrl"] = getServerUrl();
+  doc["serverType"] = static_cast<uint8_t>(getServerType());
   doc["matchMethod"] = static_cast<uint8_t>(getMatchMethod());
   doc["sendMetadata"] = getSendMetadata();
+  doc["syncClippings"] = getSyncClippings();
   doc["syncBehavior"] = static_cast<uint8_t>(getSyncBehavior());
+  JsonArray headers = doc["headers"].to<JsonArray>();
+  for (const auto& header : customHeaders) {
+    JsonObject headerObj = headers.add<JsonObject>();
+    headerObj["name"] = header.name;
+    headerObj["value_obf"] = obfuscation::obfuscateToBase64(header.value);
+  }
 }
 
 bool KOReaderCredentialStore::fromJson(JsonVariantConst doc) {
@@ -42,12 +51,30 @@ bool KOReaderCredentialStore::fromJson(JsonVariantConst doc) {
   // against the old default — pin that URL so the upgrade doesn't switch servers
   // out from under the user. Fresh setups get the new default.
   const uint8_t cfgVersion = doc["cfgVersion"] | (uint8_t)1;
-  if (cfgVersion < CONFIG_VERSION) {
+  if (cfgVersion < 2) {
     if (getServerUrl().empty() && hasCredentials()) {
       LOG_DBG("KRS", "Pre-v2 config used the old default server; pinning %s", LEGACY_DEFAULT_SERVER_URL);
       setServerUrl(LEGACY_DEFAULT_SERVER_URL);
     }
-    needsResave = true;  // stamp cfgVersion so this migration runs once
+    needsResave = true;
+  }
+
+  // v3 replaces hostname-based enhanced-progress detection with an explicit
+  // protocol profile. Preserve previous behavior on upgrade: only the built-in
+  // CrossPoint URL was enhanced, while every custom URL was strict KOSync.
+  const JsonVariantConst serverTypeValue = doc["serverType"];
+  if (cfgVersion < CONFIG_VERSION || serverTypeValue.isNull()) {
+    setServerType(getBaseUrl() == DEFAULT_SERVER_URL ? KOReaderServerType::CROSSPOINT : KOReaderServerType::KOSYNC);
+    needsResave = true;
+  } else {
+    const uint8_t type = serverTypeValue.as<uint8_t>();
+    if (type <= static_cast<uint8_t>(KOReaderServerType::OTHER)) {
+      setServerType(static_cast<KOReaderServerType>(type));
+    } else {
+      LOG_DBG("KRS", "Invalid serverType %u in JSON, resetting to KOSYNC", type);
+      setServerType(KOReaderServerType::KOSYNC);
+      needsResave = true;
+    }
   }
 
   uint8_t method = doc["matchMethod"] | (uint8_t)0;
@@ -58,6 +85,15 @@ bool KOReaderCredentialStore::fromJson(JsonVariantConst doc) {
     setMatchMethod(DocumentMatchMethod::FILENAME);
   }
   setSendMetadata(doc["sendMetadata"] | false);
+  setSyncClippings(doc["syncClippings"] | false);
+
+  size_t headerIndex = 0;
+  for (JsonObjectConst headerObj : doc["headers"].as<JsonArrayConst>()) {
+    if (headerIndex >= MAX_CUSTOM_HEADERS) break;
+    customHeaders[headerIndex].name = headerObj["name"] | "";
+    customHeaders[headerIndex].value = obfuscation::deobfuscateFromBase64(headerObj["value_obf"] | "");
+    headerIndex++;
+  }
 
   const JsonVariantConst behaviorValue = doc["syncBehavior"];
   const bool missingBehavior = behaviorValue.isNull();
@@ -113,6 +149,86 @@ void KOReaderCredentialStore::setServerUrl(const std::string& url) {
   LOG_DBG("KRS", "Set server URL: %s", url.empty() ? "(default)" : url.c_str());
 }
 
+bool KOReaderCredentialStore::isValidServerConfiguration(std::string_view url, const KOReaderServerType type) {
+  if (static_cast<uint8_t>(type) > static_cast<uint8_t>(KOReaderServerType::OTHER) || url.size() > 128) return false;
+  if (url.empty()) return true;  // Existing empty/default URL contract.
+  for (const unsigned char c : url) {
+    if (c <= ' ' || c == 0x7F || c == '\\' || c == '@' || c == '?' || c == '#') return false;
+  }
+  size_t start = 0;
+  const auto schemeEnd = url.find("://");
+  if (schemeEnd != std::string_view::npos) {
+    const auto scheme = url.substr(0, schemeEnd);
+    auto equals = [&](std::string_view expected) {
+      if (scheme.size() != expected.size()) return false;
+      for (size_t i = 0; i < scheme.size(); ++i) {
+        const char c = scheme[i] >= 'A' && scheme[i] <= 'Z' ? scheme[i] + ('a' - 'A') : scheme[i];
+        if (c != expected[i]) return false;
+      }
+      return true;
+    };
+    if (!equals("http") && !equals("https")) return false;
+    start = schemeEnd + 3;
+  }
+  const auto end = url.find('/', start);
+  const auto authority = url.substr(start, end == std::string_view::npos ? url.size() - start : end - start);
+  if (authority.empty()) return false;
+  const auto colon = authority.find(':');
+  const auto host = authority.substr(0, colon);
+  if (host.empty()) return false;
+  for (const unsigned char c : host) {
+    if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '.' || c == '-' || c == '_'))
+      return false;
+  }
+  if (colon != std::string_view::npos) {
+    const auto port = authority.substr(colon + 1);
+    if (port.empty() || port.size() > 5) return false;
+    unsigned value = 0;
+    for (const char c : port) {
+      if (c < '0' || c > '9') return false;
+      value = value * 10 + static_cast<unsigned>(c - '0');
+    }
+    if (value == 0 || value > 65535) return false;
+  }
+  return true;
+}
+
+bool KOReaderCredentialStore::saveServerConfiguration(std::string url, const KOReaderServerType type) {
+  if (!isValidServerConfiguration(url, type)) return false;
+  std::lock_guard<std::mutex> lock(storeMutex);
+  if (url == serverUrl && type == serverType) return true;
+  constexpr const char* pending = "/.crosspoint/koreader.json.server";
+  constexpr const char* scratch = "/.crosspoint/koreader.json.server.tmp";
+  constexpr const char* backup = "/.crosspoint/koreader.json.server.bak";
+  // Never overwrite recovery files from an interrupted save.
+  if (Storage.exists(pending) || Storage.exists(scratch) || Storage.exists(backup)) return false;
+  JsonDocument doc;
+  toJson(doc);
+  doc["serverUrl"] = url;
+  doc["serverType"] = static_cast<uint8_t>(type);
+  const size_t size = measureJson(doc);
+  if (doc.overflowed() || size > 4096) return false;
+  String json;
+  if (!json.reserve(size) || serializeJson(doc, json) != size) return false;
+  Storage.mkdir("/.crosspoint");
+  // HAL writeFile checks the complete write and close using the SDK's stack file handle.
+  if (!Storage.writeFile(pending, json)) return false;
+  const bool existed = Storage.exists(getFilePath());
+  if (existed && !Storage.rename(getFilePath(), backup)) {
+    Storage.remove(pending);
+    return false;
+  }
+  if (!Storage.rename(pending, getFilePath())) {
+    if (existed && !Storage.rename(backup, getFilePath())) LOG_ERR("KRS", "Server configuration rollback retained backup");
+    Storage.remove(pending);
+    return false;
+  }
+  serverUrl.swap(url);  // No allocation after the file has committed.
+  serverType = type;
+  if (existed && !Storage.remove(backup)) LOG_ERR("KRS", "Server configuration retained backup");
+  return true;
+}
+
 std::string KOReaderCredentialStore::getBaseUrl() const {
   std::string url;
   if (serverUrl.empty()) {
@@ -132,7 +248,13 @@ std::string KOReaderCredentialStore::getBaseUrl() const {
   return url;
 }
 
-bool KOReaderCredentialStore::usesCrossPointSyncServer() const { return getBaseUrl() == DEFAULT_SERVER_URL; }
+void KOReaderCredentialStore::setServerType(KOReaderServerType type) {
+  if (static_cast<uint8_t>(type) > static_cast<uint8_t>(KOReaderServerType::OTHER)) {
+    type = KOReaderServerType::KOSYNC;
+  }
+  serverType = type;
+  LOG_DBG("KRS", "Set server type: %u", static_cast<unsigned>(type));
+}
 
 void KOReaderCredentialStore::setMatchMethod(DocumentMatchMethod method) {
   matchMethod = method;
@@ -150,4 +272,11 @@ void KOReaderCredentialStore::setSyncBehavior(KOReaderSyncBehavior behavior) {
   }
   syncBehavior = behavior;
   LOG_DBG("KRS", "Set sync behavior: %s", behavior == KOReaderSyncBehavior::SMART ? "Smart" : "Ask");
+}
+
+void KOReaderCredentialStore::setCustomHeader(size_t index, const std::string& name, const std::string& value) {
+  if (index >= MAX_CUSTOM_HEADERS) return;
+  customHeaders[index].name = name;
+  customHeaders[index].value = value;
+  LOG_DBG("KRS", "Set custom header %zu: %s", index, name.empty() ? "(cleared)" : name.c_str());
 }

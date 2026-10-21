@@ -1,0 +1,71 @@
+#include <gtest/gtest.h>
+#include <algorithm>
+#include <functional>
+#include <map>
+#include <set>
+#include <string>
+#include <string_view>
+#include <vector>
+#define LOG_ERR(...) ((void)0)
+namespace FsHelpers {
+bool checkFileExtension(std::string_view p,std::string_view ext){return p.ends_with(ext);}
+@EXTENSIONS@
+std::string extractFolderPath(const std::string& p){return p.substr(0,p.rfind('/'));}
+bool isSafePathComponent(const std::string& p){return !p.empty()&&p.find('/')==std::string::npos&&p!="..";}
+}
+struct {
+ std::map<std::string,std::string> files;
+ std::set<std::string> failRename;
+ bool exists(const char* p) const {if(files.contains(p))return true;for(const auto& [key,v]:files)if(key.starts_with(std::string(p)+"/"))return true;return false;}
+ bool rename(const char* a,const char* b){std::string from=a,to=b;if(failRename.contains(from)||!exists(a)||exists(b))return false;std::vector<std::string> erase;std::map<std::string,std::string> moved;for(const auto& [key,v]:files)if(key==from||key.starts_with(from+"/")){erase.push_back(key);moved[to+key.substr(from.size())]=v;}for(const auto& key:erase)files.erase(key);files.insert(moved.begin(),moved.end());return true;}
+} Storage;
+namespace BookmarkUtil {std::string getBookmarkPath(const std::string& p){return "/marks/"+std::to_string(std::hash<std::string>{}(p));}}
+constexpr size_t NAME_BUFFER_SIZE=500;
+@RENAME_HELPERS@
+struct RecentBook{std::string path,coverBmpPath;};
+struct RecentBooksStore {
+ std::vector<RecentBook> recentBooks;int saves=0;void saveToFile(){++saves;}
+ void updatePath(const std::string&,const std::string&,const std::string&,const std::string&);
+} RECENT_BOOKS;
+@RECENT_RENAME@
+struct{std::string openEpubPath;bool saveToFile(){return true;}}APP_STATE;
+std::string utf8ComposeNfc(const std::string& s){return s;}
+struct FileBrowserActivity {
+ struct RenderLock{explicit RenderLock(FileBrowserActivity&) {}};
+ struct {int selected=0;void follow(int){}}nav;
+ int loads=0,updates=0;void loadFiles(){++loads;}int findEntry(const std::string&){return 0;}int listCount(){return 1;}void requestUpdate(bool){++updates;}
+ void renameSelectedFile(const std::string&,const std::string&,const std::string&,const std::string&);
+};
+@RENAME@
+std::string cache(const std::string& prefix,const std::string& p){return "/.crosspoint/"+prefix+std::to_string(std::hash<std::string>{}(p));}
+struct RenameOwner:testing::Test {
+ void SetUp() override{Storage={};RECENT_BOOKS={};APP_STATE={};}
+ void coverRename(const std::string& ext,const std::string& prefix){
+  const std::string old="/books/A"+ext,next="/books/B"+ext,from=cache(prefix,old),to=cache(prefix,next);
+  Storage.files={{old,"book"},{"/books/A.jpg","sidecar"},{from+"/cover.bmp","bitmap"}};
+  RECENT_BOOKS.recentBooks={{old,from+"/cover.bmp"}};APP_STATE.openEpubPath=old;
+  FileBrowserActivity ui;ui.renameSelectedFile(old,"A"+ext,"B",ext);
+  EXPECT_FALSE(Storage.exists(old.c_str()));EXPECT_TRUE(Storage.exists(next.c_str()));
+  EXPECT_EQ(Storage.files.at("/books/A.jpg"),"sidecar"); // CT keeps the original sidecar; cached cover must survive.
+  EXPECT_TRUE(Storage.exists((to+"/cover.bmp").c_str()));EXPECT_FALSE(Storage.exists(from.c_str()));
+  EXPECT_EQ(RECENT_BOOKS.recentBooks[0].coverBmpPath,to+"/cover.bmp");EXPECT_TRUE(Storage.exists(RECENT_BOOKS.recentBooks[0].coverBmpPath.c_str()));
+  EXPECT_EQ(APP_STATE.openEpubPath,next);
+ }
+};
+TEST_F(RenameOwner, TxtSidecarCoverSurvivesRenameAndReopenLookup){coverRename(".txt","txt_");}
+TEST_F(RenameOwner, MarkdownSidecarCoverSurvivesRename){coverRename(".md","txt_");}
+TEST_F(RenameOwner, EpubOwnerPreserved){coverRename(".epub","epub_");}
+TEST_F(RenameOwner, XtcOwnerPreserved){coverRename(".xtc","xtc_");}
+TEST_F(RenameOwner, NoCoverAndOtherFormatRemainRenameable){
+ for(const auto& ext:{".txt",".pdf"}){Storage.files["/books/A"+std::string(ext)]="data";FileBrowserActivity ui;ui.renameSelectedFile("/books/A"+std::string(ext),"A"+std::string(ext),"B",ext);EXPECT_TRUE(Storage.exists(("/books/B"+std::string(ext)).c_str()));}
+}
+TEST_F(RenameOwner, DestinationAndCacheCollisionHaveNoSideEffects){
+ const std::string old="/books/A.txt",next="/books/B.txt",from=cache("txt_",old),to=cache("txt_",next);
+ Storage.files={{old,"A"},{next,"B"},{from+"/cover.bmp","old"}};auto initial=Storage.files;FileBrowserActivity ui;ui.renameSelectedFile(old,"A.txt","B",".txt");EXPECT_EQ(Storage.files,initial);
+ Storage.files.erase(next);Storage.files[to+"/cover.bmp"]="existing";initial=Storage.files;ui.renameSelectedFile(old,"A.txt","B",".txt");EXPECT_EQ(Storage.files,initial);
+}
+TEST_F(RenameOwner, SourceRenameFailureRollsBackCacheAndBookmarks){
+ const std::string old="/books/A.txt",from=cache("txt_",old);
+ Storage.files={{old,"A"},{from+"/cover.bmp","old"},{BookmarkUtil::getBookmarkPath(old),"mark"}};RECENT_BOOKS.recentBooks={{old,from+"/cover.bmp"}};
+ Storage.failRename.insert(old);auto initial=Storage.files;FileBrowserActivity ui;ui.renameSelectedFile(old,"A.txt","B",".txt");EXPECT_EQ(Storage.files,initial);EXPECT_EQ(RECENT_BOOKS.saves,0);
+}

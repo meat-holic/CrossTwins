@@ -4,6 +4,7 @@
 #include <GfxRenderer.h>
 #include <gtest/gtest.h>
 
+#include <filesystem>
 #include <memory>
 #include <string>
 #include <vector>

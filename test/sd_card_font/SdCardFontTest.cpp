@@ -1,4 +1,5 @@
-﻿#include <HalStorage.h>
+﻿#include <FontPsram.h>
+#include <HalStorage.h>
 #include <SdCardFont.h>
 #include <gtest/gtest.h>
 
@@ -459,4 +460,126 @@ TEST(SdCardFontTest, RepeatedResidentReleaseRestoresKerningLigaturesAndDimension
     EXPECT_EQ(width, restoredWidth);
     EXPECT_EQ(height, restoredHeight);
   }
+}
+
+namespace {
+constexpr size_t TEST_KERN_OFFSET = 64 + 24 + 7 * sizeof(EpdGlyph);
+void trackKernClassReads(uint16_t extraEntries) {
+  sdFontTestClassReadStart = TEST_KERN_OFFSET;
+  sdFontTestClassReadEnd = TEST_KERN_OFFSET + (2 + extraEntries) * 3 * 2;
+  sdFontTestClassReads = 0;
+}
+}  // namespace
+TEST(SdCardFontTest, SparseIndexSkipsUnusedBlocksAndPressureReleaseDiscardsIt) {
+  makeKerningFont(300);
+  const size_t before = fontTestAlloc::liveBytes;
+  {
+    SdCardFont font;
+    ASSERT_TRUE(font.load("fixture"));
+    const size_t coverage = fontTestAlloc::liveBytes;
+    trackKernClassReads(300);
+    ASSERT_EQ(0, font.prewarm("ABCD", 1, false, true, false));
+    EXPECT_EQ(12U, sdFontTestClassReads);
+    sdFontTestClassReads = 0;
+    ASSERT_EQ(0, font.prewarm("ABCDEF", 1, false, true, false));
+    EXPECT_EQ(4U, sdFontTestClassReads);
+    EXPECT_EQ(-3, font.getEpdFont()->getKerning('A', 'B'));
+    font.releaseResidentCaches();
+    EXPECT_EQ(coverage, fontTestAlloc::liveBytes);
+    font.releaseResidentCaches();
+    EXPECT_EQ(coverage, fontTestAlloc::liveBytes);
+    sdFontTestClassReads = 0;
+    ASSERT_EQ(0, font.prewarm("ABCDEF", 1, false, true, false));
+    EXPECT_EQ(12U, sdFontTestClassReads);
+    EXPECT_EQ(-5, font.getEpdFont()->getKerning('C', 'D'));
+  }
+  EXPECT_EQ(before, fontTestAlloc::liveBytes);
+}
+TEST(SdCardFontTest, SparseBlocksHandleShortFinalBlocksAndMaximumClassTable) {
+  for (uint16_t extra : {0, 61, 62, 63, 64, 125, 126, 127, 128, 4094}) {
+    makeKerningFont(extra);
+    SdCardFont font;
+    ASSERT_TRUE(font.load("fixture"));
+    trackKernClassReads(extra);
+    ASSERT_EQ(0, font.prewarm("ABCDEF", 1, false, true, false));
+    const size_t blocks = (extra + 2 + 63) / 64;
+    EXPECT_EQ(2 * blocks + 2, sdFontTestClassReads) << extra;
+    EXPECT_EQ(-3, font.getEpdFont()->getKerning('A', 'B'));
+    EXPECT_EQ(-5, font.getEpdFont()->getKerning('C', 'D'));
+  }
+}
+TEST(SdCardFontTest, OptionalSparseIndexAllocationFailureUsesStreamingAndCanRecover) {
+  makeKerningFont(300, 2, 2, true);
+  SdCardFont font;
+  ASSERT_TRUE(font.load("fixture"));
+  ASSERT_EQ(0, font.prewarm("ABCDEF", 1, false, false, false));
+  trackKernClassReads(300);
+  failNextArraySize = 24;
+  ASSERT_EQ(0, font.prewarm("ABCDEF", 1, false, true, false));
+  EXPECT_EQ(0U, failNextArraySize);
+  EXPECT_EQ(20U, sdFontTestClassReads);
+  EXPECT_EQ(-3, font.getEpdFont()->getKerning('A', 'B'));
+  EXPECT_EQ(static_cast<uint32_t>('A'), font.getEpdFont()->getLigature('E', 'F'));
+  font.releaseResidentCaches();
+  sdFontTestClassReads = 0;
+  ASSERT_EQ(0, font.prewarm("ABCDEF", 1, false, true, false));
+  EXPECT_EQ(12U, sdFontTestClassReads);
+}
+TEST(SdCardFontTest, ShortClassReadDropsIncompleteIndexAndPreservesLigaturesThenRetries) {
+  makeKerningFont(300, 2, 2, true);
+  SdCardFont font;
+  ASSERT_TRUE(font.load("fixture"));
+  sdFontTestFailReadAt = TEST_KERN_OFFSET + 64 * 3;
+  const auto result = font.prewarm("ABCDEF", 1, false, true, false);
+  sdFontTestFailReadAt = SIZE_MAX;
+  ASSERT_EQ(0, result);
+  EXPECT_EQ(0, font.getEpdFont()->getKerning('A', 'B'));
+  EXPECT_EQ(static_cast<uint32_t>('A'), font.getEpdFont()->getLigature('E', 'F'));
+  ASSERT_EQ(0, font.prewarm("ABCDEF", 1, false, true, false));
+  EXPECT_EQ(-3, font.getEpdFont()->getKerning('A', 'B'));
+  EXPECT_EQ(-5, font.getEpdFont()->getKerning('C', 'D'));
+}
+TEST(SdCardFontTest, CheckedMiniKernHandleFailureLeavesLigaturesAndCanRetry) {
+  makeKerningFont(300, 2, 2, true);
+  SdCardFont font;
+  ASSERT_TRUE(font.load("fixture"));
+  ASSERT_EQ(0, font.prewarm("ABCDEF", 1, false, false, false));
+  sdFontTestHandleFailure = true;
+  const auto result = font.prewarm("ABCDEF", 1, false, true, false);
+  sdFontTestHandleFailure = false;
+  ASSERT_EQ(0, result);
+  EXPECT_EQ(0, font.getEpdFont()->getKerning('A', 'B'));
+  EXPECT_EQ(static_cast<uint32_t>('A'), font.getEpdFont()->getLigature('E', 'F'));
+  ASSERT_EQ(0, font.prewarm("ABCDEF", 1, false, true, false));
+  EXPECT_EQ(-3, font.getEpdFont()->getKerning('A', 'B'));
+}
+
+TEST(SdCardFontTest, SparseIndexIncludesMaximumBmpCodepointWithoutWrap) {
+  makeKerningFont(63);
+  constexpr size_t entries = 65;
+  put16(TEST_KERN_OFFSET + (entries - 1) * 3, 0xFFFF);
+  put16(TEST_KERN_OFFSET + entries * 3 + (entries - 1) * 3, 0xFFFF);
+  SdCardFont font;
+  ASSERT_TRUE(font.load("fixture"));
+  for (const char* ascii : {"ABCD", "ABCDEF"}) {
+    const std::string text = std::string(ascii) + "\xEF\xBF\xBF";
+    ASSERT_EQ(1, font.prewarm(text.c_str(), 1, false, true, false));
+    EXPECT_EQ(-5, font.getEpdFont()->getKerning('C', 0xFFFF));
+    EXPECT_EQ(4, font.getEpdFont()->getKerning(0xFFFF, 'B'));
+  }
+}
+TEST(SdCardFontTest, SecondPassShortReadNeverPublishesPartialKernViews) {
+  makeKerningFont(300, 2, 2, true);
+  SdCardFont font;
+  ASSERT_TRUE(font.load("fixture"));
+  trackKernClassReads(300);
+  sdFontTestFailClassReadNumber = 12;
+  const auto result = font.prewarm("ABCDEF", 1, false, true, false);
+  sdFontTestFailClassReadNumber = SIZE_MAX;
+  ASSERT_EQ(0, result);
+  EXPECT_EQ(0, font.getEpdFont()->getKerning('A', 'B'));
+  EXPECT_EQ(static_cast<uint32_t>('A'), font.getEpdFont()->getLigature('E', 'F'));
+  ASSERT_EQ(0, font.prewarm("ABCDEF", 1, false, true, false));
+  EXPECT_EQ(-3, font.getEpdFont()->getKerning('A', 'B'));
+  EXPECT_EQ(-5, font.getEpdFont()->getKerning('C', 'D'));
 }

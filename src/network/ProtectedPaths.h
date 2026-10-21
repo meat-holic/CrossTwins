@@ -16,7 +16,8 @@ inline bool validPathBytes(std::string_view path) {
   for (size_t i = 0; i < path.size();) {
     const uint8_t c = static_cast<uint8_t>(path[i++]);
     if (c < 0x80) {
-      if (c < 0x20 || c == 0x7F || std::string_view("\\:\"*?<>|").find(c) != std::string_view::npos) return false;
+      if (c < 0x20 || c == 0x7F || c == '%' || std::string_view("\\:\"*?<>|").find(c) != std::string_view::npos)
+        return false;
       continue;
     }
     uint32_t cp;
@@ -51,7 +52,7 @@ inline bool validPathBytes(std::string_view path) {
 // Full paths remain rooted on SD; parent references clamp at root, as the existing web API did.
 inline bool normalizePath(std::string_view path, std::string& out) {
   out.clear();
-  if (!validPathBytes(path)) return false;
+  if (path.size() > 512 || !validPathBytes(path)) return false;
   out.reserve(path.size() + 1);
   size_t pos = 0;
   while (pos < path.size()) {
@@ -111,6 +112,38 @@ inline bool isSensitivePath(std::string_view path) {
       }
     }
     if (match) return true;
+  }
+  return false;
+}
+// Network endpoints deny hidden/internal components and transaction siblings.
+// Decode URI paths exactly once before this check; residual '%' is unsupported.
+inline bool isNetworkPathProtected(std::string_view path) {
+  if (path.empty() || path.front() != '/' || isSensitivePath(path)) return true;
+  std::string canon;
+  if (!normalizePath(path, canon)) return true;
+  size_t start = 1;
+  while (start < canon.size()) {
+    const auto end = canon.find('/', start);
+    const auto part =
+        std::string_view(canon).substr(start, end == std::string::npos ? canon.size() - start : end - start);
+    if (part.front() == '.' || isShortAlias(part)) return true;
+    auto equal = [&](std::string_view expected) {
+      if (part.size() != expected.size()) return false;
+      for (size_t i = 0; i < part.size(); ++i)
+        if (lowerAscii(part[i]) != expected[i]) return false;
+      return true;
+    };
+    if (equal("system volume information") || equal("xtcache")) return true;
+    for (auto suffix : {std::string_view(".davtmp"), std::string_view(".davbak")}) {
+      if (part.size() >= suffix.size()) {
+        bool match = true;
+        for (size_t i = 0; i < suffix.size(); ++i)
+          if (lowerAscii(part[part.size() - suffix.size() + i]) != suffix[i]) match = false;
+        if (match) return true;
+      }
+    }
+    if (end == std::string::npos) break;
+    start = end + 1;
   }
   return false;
 }

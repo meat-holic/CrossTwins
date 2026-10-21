@@ -1,0 +1,97 @@
+#include <gtest/gtest.h>
+#include <array>
+#include <cstddef>
+#include <cstdint>
+#include <functional>
+#include <memory>
+#include <string>
+#include <utility>
+#define LOG_ERR(...) ((void)0)
+enum class StrId { STR_SETTINGS_GENERAL, STR_CAT_DISPLAY, STR_CAT_READER, STR_CAT_CONTROLS, STR_LIBRARY, STR_SETTINGS_NETWORK, STR_SETTINGS };
+struct { const char* get(StrId id) const { static const char* titles[]{"general","display","reader","controls","library","network","settings"}; return titles[static_cast<size_t>(id)]; } } I18N;
+constexpr auto STR_SETTINGS_TITLE=StrId::STR_SETTINGS;
+const char* tr(StrId id) { return I18N.get(id); }
+@SECTIONS@
+struct GfxRenderer {};
+struct MappedInputManager {};
+struct Activity { virtual ~Activity()=default; };
+struct UiListActivity:Activity {
+  GfxRenderer& renderer;
+  MappedInputManager& mappedInput;
+  struct { int selected=0; } nav;
+  std::unique_ptr<Activity> child;
+  std::function<void(int)> onReturn;
+  bool home=false;
+  int loops=0, refreshes=0;
+  UiListActivity(const char*,GfxRenderer& r,MappedInputManager& m):renderer(r),mappedInput(m) {}
+  void loop(){++loops;}
+  void onGoHome(){home=true;}
+  void resetUi(){}
+  void requestUpdate(){++refreshes;}
+  void startActivityForResult(std::unique_ptr<Activity> a,std::function<void(int)> cb){child=std::move(a);onReturn=std::move(cb);}
+  void backFromChild(){child.reset();onReturn(0);}
+};
+using ActivityResult=int;
+struct { void clearTapFlash(){} } app;
+bool failAllocation=false;
+template<class T,class... A> std::unique_ptr<T> makeUniqueNoThrow(A&&... a){return failAllocation?nullptr:std::make_unique<T>(std::forward<A>(a)...);}
+namespace fui { int bitmapFromIcon(int value){return value;} }
+constexpr int ICON_VALUES[]{0,1,2,3,4,5};
+constexpr const int* SECTION_ICONS[]{&ICON_VALUES[0],&ICON_VALUES[1],&ICON_VALUES[2],&ICON_VALUES[3],&ICON_VALUES[4],&ICON_VALUES[5]};
+struct SettingsActivity:UiListActivity {
+  const SettingsSection section;
+  SettingsActivity(GfxRenderer&,MappedInputManager&,SettingsSection);
+  const char* headerTitle() const;
+};
+// Production ctor initialization uses the base's references.
+@SINGLE_CTOR@
+@SINGLE_TITLE@
+struct SettingsListActivity:UiListActivity {
+  SettingsSection pendingSection;
+  struct Item { const char* label=nullptr; int icon=0; int16_t actionValue=-1; };
+  std::array<Item,SETTINGS_SECTION_COUNT> rowItems_{};
+  SettingsListActivity(GfxRenderer&,MappedInputManager&,SettingsSection);
+  void loop(); void rebuildRows(); void activateIndex(int); void openSection(SettingsSection); void onBackButton();
+};
+@ROOT_CTOR@
+@ROOT_LOOP@
+@ROOT_ROWS@
+@ROOT_ACTIVATE@
+@ROOT_BACK@
+struct ActivityManager {
+  GfxRenderer renderer;
+  MappedInputManager mappedInput;
+  std::unique_ptr<Activity> current;
+  void replaceActivity(std::unique_ptr<Activity> a){current=std::move(a);}
+  @ROUTE_DECL@
+};
+@ROUTE@
+TEST(SettingsRouting, HomeDefaultOpensAllSectionsRoot){
+ ActivityManager manager;manager.goToSettings();
+ auto* root=dynamic_cast<SettingsListActivity*>(manager.current.get());ASSERT_NE(root,nullptr);
+ root->rebuildRows();EXPECT_EQ(root->rowItems_.size(),6u);
+ for(size_t i=0;i<SETTINGS_SECTION_COUNT;++i){EXPECT_NE(root->rowItems_[i].label,nullptr);EXPECT_EQ(root->rowItems_[i].actionValue,i);}
+}
+TEST(SettingsRouting, EverySectionAndBackPreservesRootNavigation){
+ GfxRenderer r;MappedInputManager m;SettingsListActivity root(r,m,SettingsSection::End);
+ for(int i=0;i<6;++i){root.activateIndex(i);auto* section=dynamic_cast<SettingsActivity*>(root.child.get());ASSERT_NE(section,nullptr);EXPECT_EQ(section->section,static_cast<SettingsSection>(i));EXPECT_STREQ(section->headerTitle(),I18N.get(SETTINGS_SECTION_TITLES[i]));root.backFromChild();EXPECT_EQ(root.nav.selected,i);}
+ root.onBackButton();EXPECT_TRUE(root.home);
+}
+TEST(SettingsRouting, SectionShortcutOpensOnceThenReturnsToRoot){
+ ActivityManager manager;manager.goToSettings(SettingsSection::Network);
+ auto* root=dynamic_cast<SettingsListActivity*>(manager.current.get());ASSERT_NE(root,nullptr);
+ root->loop();ASSERT_NE(root->child,nullptr);EXPECT_EQ(root->pendingSection,SettingsSection::End);
+ root->backFromChild();root->loop();EXPECT_EQ(root->child,nullptr);
+}
+TEST(SettingsRouting, InvalidShortcutAndRowsDoNotOpenInvalidSection){
+ GfxRenderer r;MappedInputManager m;
+ for(auto value:{6,255}){SettingsListActivity root(r,m,static_cast<SettingsSection>(value));root.loop();EXPECT_EQ(root.child,nullptr);root.activateIndex(value);EXPECT_EQ(root.child,nullptr);root.activateIndex(-1);EXPECT_EQ(root.child,nullptr);}
+}
+TEST(SettingsRouting, EmptyInvalidSingleSectionHasSafeFallbackTitle){
+ GfxRenderer r;MappedInputManager m;
+ for(auto value:{6,255}){SettingsActivity section(r,m,static_cast<SettingsSection>(value));EXPECT_STREQ(section.headerTitle(),tr(STR_SETTINGS_TITLE));}
+}
+TEST(SettingsRouting, ChildAllocationFailureKeepsRoot){
+ GfxRenderer r;MappedInputManager m;SettingsListActivity root(r,m,SettingsSection::End);
+ failAllocation=true;root.openSection(SettingsSection::Reader);failAllocation=false;EXPECT_EQ(root.child,nullptr);
+}

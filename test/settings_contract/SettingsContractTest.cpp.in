@@ -1,0 +1,517 @@
+#include <ArduinoJson.h>
+#include <BlePageTurnerJson.h>
+#include <CrossPointSettings.h>
+#include <I18n.h>
+#include <gtest/gtest.h>
+
+#include <algorithm>
+#include <array>
+#include <cstring>
+#include <functional>
+#include <iterator>
+#include <limits>
+#include <map>
+#include <memory>
+#include <span>
+#include <string>
+#include <vector>
+#define private public
+#include <ReaderFontSizes.h>
+#undef private
+#include "activities/settings/TextSettingsCapabilities.h"
+#define LOG_DBG(...) ((void)0)
+#define LOG_ERR(...) ((void)0)
+struct BoardConfig {
+  static bool hasTouch() { return SETTINGS_TEST_TOUCH; }
+  static bool hasHomeKey() { return SETTINGS_TEST_TOUCH; }
+  static bool isX4Pro() { return SETTINGS_TEST_TOUCH; }
+  static bool isX4Classic() { return false; }
+};
+struct UITheme {
+  static bool supportsCoverGrid() { return SETTINGS_TEST_TOUCH; }
+};
+struct Sensor {
+  bool available = true;
+  bool isAvailable() const { return available; }
+} halClock, halTiltSensor;
+struct DictionaryEntry {
+  std::string name;
+};
+struct DictionaryRegistry {
+  static void discover(std::vector<DictionaryEntry>&) {}
+};
+enum class DocumentMatchMethod { Filename, Binary };
+enum class KOReaderSyncBehavior { Ask, Smart };
+enum class KOReaderServerType : uint8_t { CROSSPOINT, KOSYNC, OTHER };
+struct CredentialStore {
+  std::string user = "reader", pass = "secret", url = "https://example.invalid";
+  DocumentMatchMethod match = DocumentMatchMethod::Filename;
+  KOReaderSyncBehavior sync = KOReaderSyncBehavior::Ask;
+  bool metadata = true;
+  KOReaderServerType type = KOReaderServerType::CROSSPOINT;
+  bool failServerSave = false;
+  KOReaderServerType getServerType() const { return type; }
+  static bool isValidServerConfiguration(std::string_view, KOReaderServerType);
+  bool saveServerConfiguration(std::string value, KOReaderServerType profile) {
+    if (failServerSave || !isValidServerConfiguration(value, profile)) return false;
+    url = std::move(value); type = profile; return true;
+  }
+  const std::string& getUsername() const { return user; }
+  const std::string& getPassword() const { return pass; }
+  const std::string& getServerUrl() const { return url; }
+  void setCredentials(const std::string& u, const std::string& p) {
+    user = u;
+    pass = p;
+  }
+  void setServerUrl(const std::string& value) { url = value; }
+  DocumentMatchMethod getMatchMethod() const { return match; }
+  void setMatchMethod(DocumentMatchMethod m) { match = m; }
+  KOReaderSyncBehavior getSyncBehavior() const { return sync; }
+  void setSyncBehavior(KOReaderSyncBehavior b) { sync = b; }
+  bool getSendMetadata() const { return metadata; }
+  void setSendMetadata(bool m) { metadata = m; }
+  void saveToFile() {}
+} KOREADER_STORE;
+using KOReaderCredentialStore = CredentialStore;
+@VALIDATE_SERVER@
+namespace obfuscation {
+std::string obfuscateToBase64(const char* value) { return value; }
+std::string deobfuscateFromBase64(const char* value, size_t max, bool* ok, bool* tooLong) {
+  *tooLong = std::strlen(value) > max;
+  *ok = !*tooLong;
+  return *ok ? value : "";
+}
+}  // namespace obfuscation
+@INFO@
+#include "HomeButtonSettings.h"
+@REGISTRY@
+@LOOKUP@
+@POINT_SIZES@
+@METADATA_HEADER@
+@METADATA_SOURCE@
+#include "util/ParagraphIndentMigration.h"
+@PERSISTENCE@
+void yield() {}
+void resetTaskWatchdogIfSubscribed() {}
+constexpr int CONTENT_LENGTH_UNKNOWN = -1;
+class String : public std::string {
+ public:
+  using std::string::string;
+  String(const std::string& s) : std::string(s) {}
+  explicit String(int n) : std::string(std::to_string(n)) {}
+};
+struct FontSystem {
+  SdCardFontRegistry value;
+  int loads = 0;
+  const SdCardFontRegistry& registry() const { return value; }
+  void ensureLoaded(int&) {
+    EXPECT_TRUE(fontLockHeld);
+    ++loads;
+    const auto points = readerFontPointSizes(&value, SETTINGS.sdFontFamilyName);
+    if (!points.empty()) SETTINGS.fontPointSize = snapToNearestPointSize(points, SETTINGS.fontPointSize);
+  }
+} sdFontSystem;
+struct WebServer {
+  std::string body, response;
+  int status = 0;
+  bool plain = true;
+  bool hasArg(const char*) const { return plain; }
+  String arg(const char*) const { return body; }
+  void setContentLength(int) {}
+  void send(int code, const char*, const String& s) {
+    status = code;
+    response = s;
+  }
+  void sendContent(const char* s) { response += s; }
+};
+class CrossPointWebServer {
+ public:
+  std::unique_ptr<WebServer> server = std::make_unique<WebServer>();
+  void handleGetSettings() const;
+  void handlePostSettings();
+};
+@WEB@
+struct RenderLock {
+  RenderLock() {
+    EXPECT_FALSE(fontLockHeld);
+    fontLockHeld = true;
+  }
+  ~RenderLock() { fontLockHeld = false; }
+};
+class TextSettingsActivity {
+ public:
+  enum class Tab : uint8_t { Family, Size, Layout, Style, Count };
+  const SdCardFontRegistry* registry_ = &sdFontSystem.value;
+  int renderer = 0, currentFamilyIndex_ = -1, currentSizeIndex_ = -1, updates = 0;
+  struct FontEntry {
+    std::string name;
+  };
+  struct SizeEntry {
+    std::string name;
+    uint8_t pointSize;
+  };
+  std::vector<FontEntry> fonts_;
+  std::vector<SizeEntry> sizes_;
+  struct Nav {
+    int selected = 0;
+  } tabNavs[4];
+  Tab tab_ = Tab::Family;
+  textsettings::Profile profile_ = textsettings::Profile::Epub;
+  void requestUpdate() { ++updates; }
+  void confirmLayoutRow(int) {}
+  void confirmStyleRow(int) {}
+  void rebuildSizeList();
+  void applyFamily(int);
+  void applySize(int);
+  void activateRow(int);
+  int listCount() const;
+};
+@UI_FIND@
+@UI_SIZE_LIST@
+@UI_FAMILY@
+@UI_ACTIVATE@
+@UI_SIZE@
+@UI_COUNT@
+
+class SettingsContract : public testing::Test {
+ protected:
+  CrossPointWebServer web;
+  void SetUp() override {
+    SETTINGS = PersistableStore<CrossPointSettings>::defaults();
+    halTiltSensor.available = true;
+    sdFontSystem.value.families_.clear();
+    sdFontSystem.loads = 0;
+    fontLockHeld = false;
+    settingsSavedWhileLocked = false;
+    I18N.setLanguage(Language::EN);
+  }
+  void load(const char* raw) {
+    JsonDocument d;
+    ASSERT_FALSE(deserializeJson(d, raw));
+    ASSERT_TRUE(SETTINGS.fromJson(d.as<JsonVariantConst>()));
+  }
+  JsonDocument saved() {
+    JsonDocument d;
+    SETTINGS.toJson(d);
+    return d;
+  }
+  void post(const char* raw) {
+    web.server->body = raw;
+    web.handlePostSettings();
+    ASSERT_EQ(web.server->status, 200);
+  }
+  JsonDocument get() {
+    web.handleGetSettings();
+    JsonDocument d;
+    EXPECT_FALSE(deserializeJson(d, web.server->response));
+    return d;
+  }
+};
+TEST_F(SettingsContract, StoredEnumsRemainCtValues) {
+  static_assert(CrossPointSettings::NOTOSERIF == 0 && CrossPointSettings::NOTOSANS == 1);
+  static_assert(CrossPointSettings::PWR_CONFIRM == 5 && CrossPointSettings::SHORT_PWRBTN_COUNT == 6);
+  static_assert(CrossPointSettings::LP_MENU_READER_MENU == 4 &&
+                CrossPointSettings::LONG_PRESS_MENU_FUNCTION_COUNT == 5);
+  static_assert(CrossPointSettings::JUSTIFIED == 0 && CrossPointSettings::LEFT_ALIGN == 1 &&
+                CrossPointSettings::BOOK_STYLE == 4);
+  static_assert(CrossPointSettings::QUICK_RESUME == 6 && CrossPointSettings::TRANSPARENT_CUSTOM == 7);
+  EXPECT_EQ(SETTINGS.fontPointSize, 14);
+  EXPECT_EQ(SETTINGS.paragraphIndentSpaces, 2);
+  EXPECT_EQ(SETTINGS.sleepTimeoutMinutes, 10);
+}
+TEST_F(SettingsContract, ValidJsonRoundTripPreservesIndependentReaderAndSystemValues) {
+  load(
+      R"({"language":"KO","fontFamily":1,"fontSize":17,"sdFontFamilyName":"한글","lineSpacing":3,"extraParagraphSpacing":0,"paragraphIndentSpaces":4,"wordSpacing":175,"characterSpacing":4,"paragraphAlignment":3,"sleepTimeoutMinutes":31,"slideshowIntervalSeconds":90,"keyboardLayouts":3,"longPressMenuFunction":2,"shortPwrBtn":4,"opdsDownloadFolder":"/책","dictionaryName":"국어"})");
+  auto d = saved();
+  EXPECT_EQ(d["fontSize"].as<int>(), 17);
+  EXPECT_STREQ(d["sdFontFamilyName"], "한글");
+  EXPECT_STREQ(d["language"], "KO");
+  EXPECT_EQ(d["paragraphIndentSpaces"].as<int>(), 4);
+  EXPECT_EQ(d["extraParagraphSpacing"].as<int>(), 0);
+  EXPECT_EQ(d["sleepTimeoutMinutes"].as<int>(), 31);
+  EXPECT_EQ(SETTINGS.getSleepTimeoutMs(), 0UL);
+  std::string raw;
+  serializeJson(d, raw);
+  SETTINGS = PersistableStore<CrossPointSettings>::defaults();
+  load(raw.c_str());
+  auto again = saved();
+  EXPECT_TRUE(d == again);
+  EXPECT_STREQ(SETTINGS.opdsDownloadFolder, "/책");
+  EXPECT_STREQ(SETTINGS.dictionaryName, "국어");
+  EXPECT_EQ(SETTINGS.fontFamily, 1);
+  EXPECT_EQ(SETTINGS.longPressMenuFunction, 2);
+  EXPECT_EQ(SETTINGS.shortPwrBtn, 4);
+}
+TEST_F(SettingsContract, NullTypeAndOutOfRangeDoNotAliasEnumOrChangeOtherSavedValues) {
+  SETTINGS.lineSpacing = 2;
+  SETTINGS.extraParagraphSpacing = 0;
+  SETTINGS.sleepTimeoutMinutes = 15;
+  for (const char* raw : {R"({"lineSpacing":null})", R"({"lineSpacing":"1"})", R"({"lineSpacing":256})",
+                          R"({"lineSpacing":-1})", R"({"lineSpacing":9})", R"({"lineSpacing":true})"}) {
+    load(raw);
+    EXPECT_EQ(SETTINGS.lineSpacing, 2);
+    EXPECT_EQ(SETTINGS.extraParagraphSpacing, 0);
+    EXPECT_EQ(SETTINGS.sleepTimeoutMinutes, 15);
+  }
+  load(R"({"wordSpacing":250,"screenMargin":1})");
+  EXPECT_EQ(SETTINGS.wordSpacing, 200);
+  EXPECT_EQ(SETTINGS.screenMargin, 5);
+}
+TEST_F(SettingsContract, LegacyPhysicalSizeFamilySleepAndIndentMigrations) {
+  for (int slot = 0; slot < 4; ++slot) {
+    std::string raw = "{\"fontSize\":" + std::to_string(slot) + ",\"sleepTimeout\":" + std::to_string(slot) +
+                      ",\"extraParagraphSpacing\":0}";
+    load(raw.c_str());
+    EXPECT_EQ(SETTINGS.fontPointSize, 12 + slot * 2);
+    EXPECT_EQ(SETTINGS.paragraphIndentSpaces, 2);
+  }
+  load(R"({"fontFamily":2,"sleepTimeout":4,"extraParagraphSpacing":1})");
+  EXPECT_STREQ(SETTINGS.sdFontFamilyName, "OpenDyslexic");
+  EXPECT_EQ(SETTINGS.fontFamily, 0);
+  EXPECT_EQ(SETTINGS.sleepTimeoutMinutes, 30);
+  EXPECT_EQ(SETTINGS.paragraphIndentSpaces, 0);
+  load(R"({"fontFamily":2,"sdFontFamilyName":"Own","paragraphIndentSpaces":5,"extraParagraphSpacing":0})");
+  EXPECT_STREQ(SETTINGS.sdFontFamilyName, "Own");
+  EXPECT_EQ(SETTINGS.paragraphIndentSpaces, 5);
+  EXPECT_EQ(SETTINGS.focusReadingEnabled, 0);
+}
+TEST_F(SettingsContract, CombinedTouchAndHomeMappingsKeepStableMeaning) {
+  load(R"({"touchReaderControls":3,"longPressMenuFunction":2,"frontButtonBack":1,"frontButtonConfirm":1})");
+  EXPECT_EQ(SETTINGS.touchReaderControls, 1);
+  EXPECT_EQ(SETTINGS.pageTurnGesture, 3);
+  EXPECT_EQ(SETTINGS.previousPageGesture, 3);
+  EXPECT_EQ(SETTINGS.frontButtonBack, 0);
+  EXPECT_EQ(SETTINGS.frontButtonConfirm, 1);
+  if (BoardConfig::hasHomeKey())
+    EXPECT_EQ(SETTINGS.homeButtonLongPressAction, static_cast<uint8_t>(HomeButtonAction::Bookmark));
+}
+TEST_F(SettingsContract, LocaleFallbackAppliesOnEveryLoad) {
+  load(R"({"language":"KO"})");
+  EXPECT_EQ(SETTINGS.language, 1);
+  for (const char* raw : {"{}", R"({"language":null})", R"({"language":true})", R"({"language":1})",
+                          R"({"language":"FR"})", R"({"language":[]})"}) {
+    SETTINGS.language = 1;
+    load(raw);
+    EXPECT_EQ(SETTINGS.language, 0);
+  }
+  SETTINGS.language = 255;
+  EXPECT_STREQ(saved()["language"], "EN");
+}
+TEST_F(SettingsContract, BleSelectedAndAutomaticPolicyRoundTripRetainsRemotes) {
+  for (int pick : {0, 1}) {
+    std::string raw =
+        "{\"blePageTurnerEnabled\":1,\"blePick\":" + std::to_string(pick) +
+        R"(,"blePeerAddr":"AA:BB:CC:DD:EE:01","blePeerName":"BOOX","bleRemotes":[{"addr":"AA:BB:CC:DD:EE:01","binds":[]},{"addr":"AA:BB:CC:DD:EE:02","binds":[]}]})";
+    load(raw.c_str());
+    auto d = saved();
+    EXPECT_EQ(SETTINGS.ble.pick, pick);
+    EXPECT_EQ(SETTINGS.ble.remoteCount, 2);
+    EXPECT_EQ(d["blePick"].as<int>(), pick);
+    EXPECT_STREQ(d["blePeerAddr"], "AA:BB:CC:DD:EE:01");
+    load(raw.c_str());
+    EXPECT_EQ(SETTINGS.ble.remoteCount, 2);
+  }
+}
+TEST_F(SettingsContract, VisitorAndUiShareCtKeysWithoutExcludedFields) {
+  auto base = getBaseSettingsList();
+  auto ui = getSettingsList();
+  std::map<std::string, int> keys;
+  for (const auto& s : base) {
+    if (s.key) {
+      EXPECT_EQ(++keys[s.key], 1);
+      EXPECT_EQ(std::string(s.key).find("plugin"), std::string::npos);
+      EXPECT_EQ(std::string(s.key).find("Clipping"), std::string::npos);
+    }
+  }
+  for (const auto& s : ui) {
+    if (s.key) EXPECT_TRUE(keys.contains(s.key));
+  }
+  EXPECT_TRUE(keys.contains("fontSize"));
+  EXPECT_TRUE(keys.contains("opdsDownloadFolder"));
+  EXPECT_FALSE(keys.contains("focusReadingEnabled"));
+  EXPECT_FALSE(keys.contains("koSyncClippings"));
+}
+TEST_F(SettingsContract, FailedProbeHidesTiltOnlyFromUiNotPersistence) {
+  SETTINGS.tiltPageTurn = 2;
+  halTiltSensor.available = false;
+  load(R"({"tiltPageTurn":1})");
+  EXPECT_EQ(SETTINGS.tiltPageTurn, 1);
+  EXPECT_EQ(saved()["tiltPageTurn"].as<int>(), 1);
+  auto list = getSettingsList();
+  EXPECT_TRUE(std::none_of(list.begin(), list.end(),
+                           [](const auto& s) { return s.valuePtr == &CrossPointSettings::tiltPageTurn; }));
+}
+TEST_F(SettingsContract, WebInvalidTypesAndRedactedPasswordNeverOverwriteState) {
+  SETTINGS.lineSpacing = 2;
+  SETTINGS.extraParagraphSpacing = 1;
+  KOREADER_STORE.pass = "keep";
+  post(R"({"lineSpacing":"0","extraParagraphSpacing":null,"wordSpacing":true,"koPassword":null})");
+  EXPECT_EQ(SETTINGS.lineSpacing, 2);
+  EXPECT_EQ(SETTINGS.extraParagraphSpacing, 1);
+  EXPECT_EQ(SETTINGS.wordSpacing, 100);
+  EXPECT_EQ(KOREADER_STORE.pass, "keep");
+  post(R"({"lineSpacing":3,"extraParagraphSpacing":0,"wordSpacing":175,"koPassword":""})");
+  EXPECT_EQ(SETTINGS.lineSpacing, 3);
+  EXPECT_EQ(SETTINGS.extraParagraphSpacing, 0);
+  EXPECT_EQ(SETTINGS.wordSpacing, 175);
+  EXPECT_TRUE(KOREADER_STORE.pass.empty());
+  auto d = get();
+  for (auto item : d.as<JsonArray>()) {
+    if (item["key"] == "lineSpacing") EXPECT_EQ(item["value"].as<int>(), 3);
+  }
+}
+TEST_F(SettingsContract, TxtCapabilitiesExcludeEpubOnlyControlsAndKeepAlignmentValues) {
+  using namespace textsettings;
+  EXPECT_EQ(layoutControlCount(Profile::Txt), 3u);
+  EXPECT_EQ(styleControlCount(Profile::Txt), 2u);
+  EXPECT_FALSE(hasLayoutControl(Profile::Txt, LayoutControl::ParagraphIndentation));
+  EXPECT_FALSE(hasLayoutControl(Profile::Txt, LayoutControl::ParagraphSpacing));
+  EXPECT_FALSE(hasStyleControl(Profile::Txt, StyleControl::EmbeddedStyle));
+  EXPECT_EQ(alignmentOptionAt(Profile::Txt, 0), AlignmentOption::Left);
+  EXPECT_EQ(alignmentOptionAt(Profile::Txt, 2), AlignmentOption::Right);
+  EXPECT_EQ(alignmentOptionCount(Profile::Epub), 5u);
+}
+
+TEST_F(SettingsContract, SdFamilyAndPhysicalSizeUseSameWebAndDeviceMeaning) {
+  sdFontSystem.value.families_ = {{"CJK", {{"/CJK_10.cpfont", 10, 0}, {"/CJK_14.cpfont", 14, 0}}, false},
+                                  {"Other", {{"/Other_18.cpfont", 18, 0}, {"/Other_22.cpfont", 22, 0}}, false}};
+  std::strcpy(SETTINGS.sdFontFamilyName, "CJK");
+  SETTINGS.fontPointSize = 14;
+  auto family = buildFontFamilySetting(&sdFontSystem.registry());
+  EXPECT_EQ(family.valueGetter(), 0);
+  auto size = buildFontSizeSetting(&sdFontSystem.registry());
+  EXPECT_EQ(size.valueGetter(), 1);
+  EXPECT_EQ(size.enumStringValues[1], "14 pt");
+  post(R"({"fontFamily":1,"fontSize":1})");
+  EXPECT_STREQ(SETTINGS.sdFontFamilyName, "Other");
+  EXPECT_EQ(SETTINGS.fontPointSize, 22);
+  auto d = saved();
+  EXPECT_EQ(d["fontSize"].as<int>(), 22);
+  EXPECT_STREQ(d["sdFontFamilyName"], "Other");
+  auto wire = get();
+  bool seen = false;
+  for (auto item : wire.as<JsonArray>()) {
+    if (item["key"] == "fontSize") {
+      seen = true;
+      EXPECT_EQ(item["value"].as<int>(), 1);
+      EXPECT_STREQ(item["options"][1], "22 pt");
+    }
+  }
+  EXPECT_TRUE(seen);
+  SETTINGS.sdFontIdResolver = [](void* ctx, const char* name, uint8_t pt) {
+    return ctx && std::strcmp(name, "Other") == 0 && pt == 22 ? 123456 : 0;
+  };
+  SETTINGS.sdFontResolverCtx = this;
+  EXPECT_EQ(SETTINGS.getReaderFontId(), 123456);
+}
+TEST_F(SettingsContract, MissingFontsExposeNoFakeBuiltinOrSizeAndDoNotDestroySavedSelection) {
+  sdFontSystem.value.families_.clear();
+  std::strcpy(SETTINGS.sdFontFamilyName, "Missing");
+  SETTINGS.fontPointSize = 19;
+  auto f = buildFontFamilySetting(&sdFontSystem.registry());
+  auto size = buildFontSizeSetting(&sdFontSystem.registry());
+  EXPECT_TRUE(f.enumStringValues.empty());
+  EXPECT_TRUE(size.enumStringValues.empty());
+  f.valueSetter(0);
+  size.valueSetter(0);
+  EXPECT_STREQ(SETTINGS.sdFontFamilyName, "Missing");
+  EXPECT_EQ(SETTINGS.fontPointSize, 19);
+  EXPECT_EQ(SETTINGS.getReaderFontId(), 0);
+  post(R"({"fontFamily":0,"fontSize":0})");
+  EXPECT_STREQ(SETTINGS.sdFontFamilyName, "Missing");
+  EXPECT_EQ(SETTINGS.fontPointSize, 19);
+}
+
+TEST_F(SettingsContract, UiFamilySelectionRefreshesPhysicalSizeAndSavesOutsideRenderLock) {
+  sdFontSystem.value.families_ = {{"A", {{"/A_10.cpfont", 10, 0}}, false},
+                                  {"B", {{"/B_18.cpfont", 18, 0}, {"/B_22.cpfont", 22, 0}}, false}};
+  TextSettingsActivity ui;
+  ui.fonts_ = {{"A"}, {"B"}};
+  std::strcpy(SETTINGS.sdFontFamilyName, "A");
+  SETTINGS.fontPointSize = 20;
+  ui.currentFamilyIndex_ = 0;
+  ui.activateRow(1);
+  EXPECT_STREQ(SETTINGS.sdFontFamilyName, "B");
+  EXPECT_EQ(SETTINGS.fontPointSize, 18);
+  EXPECT_EQ(ui.currentFamilyIndex_, 1);
+  EXPECT_EQ(ui.currentSizeIndex_, 0);
+  EXPECT_EQ(ui.tabNavs[1].selected, 1);
+  EXPECT_EQ(SETTINGS.saves, 1);
+  EXPECT_FALSE(settingsSavedWhileLocked);
+  EXPECT_FALSE(fontLockHeld);
+  ui.tab_ = TextSettingsActivity::Tab::Size;
+  ui.activateRow(1);
+  EXPECT_EQ(SETTINGS.fontPointSize, 22);
+  EXPECT_EQ(SETTINGS.saves, 2);
+  EXPECT_EQ(sdFontSystem.loads, 2);
+  EXPECT_FALSE(settingsSavedWhileLocked);
+}
+TEST_F(SettingsContract, UiMissingFontsRejectsRowsWithoutTouchingSavedSelection) {
+  TextSettingsActivity ui;
+  std::strcpy(SETTINGS.sdFontFamilyName, "Missing");
+  SETTINGS.fontPointSize = 17;
+  ui.rebuildSizeList();
+  EXPECT_EQ(ui.listCount(), 0);
+  EXPECT_EQ(ui.currentSizeIndex_, -1);
+  ui.activateRow(0);
+  ui.activateRow(-1);
+  ui.tab_ = TextSettingsActivity::Tab::Size;
+  ui.activateRow(0);
+  EXPECT_EQ(SETTINGS.saves, 0);
+  EXPECT_EQ(sdFontSystem.loads, 0);
+  EXPECT_EQ(SETTINGS.fontPointSize, 17);
+  EXPECT_STREQ(SETTINGS.sdFontFamilyName, "Missing");
+}
+TEST_F(SettingsContract, UiUsesProfileSpecificVisibleRowCounts) {
+  TextSettingsActivity ui;
+  ui.profile_ = textsettings::Profile::Txt;
+  ui.tab_ = TextSettingsActivity::Tab::Layout;
+  EXPECT_EQ(ui.listCount(), 3);
+  ui.tab_ = TextSettingsActivity::Tab::Style;
+  EXPECT_EQ(ui.listCount(), 2);
+  ui.profile_ = textsettings::Profile::Epub;
+  EXPECT_EQ(ui.listCount(), 3);
+  ui.tab_ = TextSettingsActivity::Tab::Layout;
+  EXPECT_EQ(ui.listCount(), 7);
+}
+
+TEST_F(SettingsContract, WebServerPairRejectsUrlOnlyChangeBeforeOtherMutations) {
+  const auto oldUrl = KOREADER_STORE.url;
+  const auto oldSpacing = SETTINGS.lineSpacing;
+  web.server->body = R"({"koServerUrl":"https://new.invalid","lineSpacing":3})";
+  web.handlePostSettings();
+  EXPECT_EQ(web.server->status, 400);
+  EXPECT_EQ(KOREADER_STORE.url, oldUrl);
+  EXPECT_EQ(KOREADER_STORE.type, KOReaderServerType::CROSSPOINT);
+  EXPECT_EQ(SETTINGS.lineSpacing, oldSpacing);
+}
+TEST_F(SettingsContract, WebServerPairPreservesExplicitChoiceAndRejectsInvalidOrFailedSave) {
+  post(R"({"koServerUrl":"https://new.invalid","koServerType":1})");
+  EXPECT_EQ(KOREADER_STORE.url, "https://new.invalid");
+  EXPECT_EQ(KOREADER_STORE.type, KOReaderServerType::KOSYNC);
+  post(R"({"koServerUrl":"https://other.invalid","koServerType":0})");
+  EXPECT_EQ(KOREADER_STORE.type, KOReaderServerType::CROSSPOINT);
+  const auto before = KOREADER_STORE.url;
+  for (const char* input : {R"({"koServerUrl":"https://bad host","koServerType":1})",
+                             R"({"koServerUrl":"https://new.invalid\u0000suffix","koServerType":1})",
+                             R"({"koServerUrl":null,"koServerType":1})",
+                             R"({"koServerUrl":"https://new.invalid","koServerType":-1})",
+                             R"({"koServerUrl":"https://new.invalid","koServerType":"1"})"}) {
+    web.server->body = input; web.handlePostSettings(); EXPECT_EQ(web.server->status,400);
+    EXPECT_EQ(KOREADER_STORE.url,before); EXPECT_EQ(KOREADER_STORE.type,KOReaderServerType::CROSSPOINT);
+  }
+  KOREADER_STORE.failServerSave=true;
+  web.server->body=R"({"koServerUrl":"https://new.invalid","koServerType":1})";
+  web.handlePostSettings(); EXPECT_EQ(web.server->status,500);
+  EXPECT_EQ(KOREADER_STORE.url,before); EXPECT_EQ(KOREADER_STORE.type,KOReaderServerType::CROSSPOINT);
+}
+TEST_F(SettingsContract, WebModelIncludesCurrentProfileAndUnchangedLegacyUrlIsHarmless) {
+  auto model=get();bool found=false;
+  for (auto setting:model.as<JsonArray>()) if(setting["key"]=="koServerType") {
+    found=true; EXPECT_EQ(setting["value"].as<int>(),static_cast<int>(KOREADER_STORE.type));
+    EXPECT_EQ(setting["options"].size(),3u);
+  }
+  EXPECT_TRUE(found);
+  JsonDocument unchanged;unchanged["koServerUrl"]=KOREADER_STORE.url;
+  serializeJson(unchanged,web.server->body);web.handlePostSettings();EXPECT_EQ(web.server->status,200);
+}

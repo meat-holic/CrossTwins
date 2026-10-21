@@ -289,4 +289,19 @@ TEST_F(CssParserTest, CacheHydrationRejectsNonFiniteStyleLengths) {
   }
 }
 
+TEST_F(CssParserTest, CacheRejectsOldVersion) {
+  CssParser writer(cachePath());
+  ASSERT_EQ(loadCss(writer, "p{font-weight:inherit;font-style:inherit}"), CssParser::ParseResult::Complete);
+  for (const bool complete : {false, true}) {
+    ASSERT_TRUE(writer.saveToCache(complete));
+    auto bytes = readCache();
+    ASSERT_FALSE(bytes.empty());
+    bytes[0] = CssParser::CSS_CACHE_VERSION - 1;
+    writeCache(bytes);
+    CssParser reader(cachePath());
+    EXPECT_EQ(reader.inspectCache(), CssParser::CacheStatus::Invalid);
+    EXPECT_EQ(reader.loadFromCache(), CssParser::CacheLoadResult::Invalid);
+  }
+}
+
 }  // namespace

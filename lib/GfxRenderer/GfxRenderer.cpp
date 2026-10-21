@@ -257,6 +257,19 @@ void GfxRenderer::insertFont(const int fontId, EpdFontFamily font) {
   }
 }
 
+void GfxRenderer::removeFont(const int fontId) {
+  for (auto it = fallbackFontMap_.begin(); it != fallbackFontMap_.end();) {
+    if (it->first == fontId || it->second == fontId)
+      it = fallbackFontMap_.erase(it);
+    else
+      ++it;
+  }
+  ttfFonts_.erase(fontId);
+  sdCardFonts_.erase(fontId);
+  sdCardFontScales_.erase(fontId);
+  fontMap.erase(fontId);
+}
+
 int GfxRenderer::resolveTextFontId(const int fontId, const char* text, const EpdFontFamily::Style style) const {
   if (fallbackFontMap_.empty() || text == nullptr || *text == '\0') {
     return fontId;

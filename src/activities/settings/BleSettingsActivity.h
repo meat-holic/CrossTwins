@@ -31,7 +31,8 @@ class BleSettingsActivity final : public UiListActivity {
   void onBackButton() override;
   void showView(View target);
   uint32_t signature() const;
-  void refresh();
+  bool consumeConnectFailure();
+  void refresh(bool connectionFailed = false);
   // Button mapping reads the linked remote's button edges and stores them in its table.
   void startLearning(int index);
   void stepLearning();

@@ -22,6 +22,7 @@ class TickTest : public ::testing::Test {
   void SetUp() override {
     fake::reset();
     config.enabled = 1;
+    std::strcpy(config.peerAddr, "7d:de:5c:bd:ae:ca");
     bleturner::begin(fake::hostFns(), config);
     // Starts run on their own task: queued, run by the test after the pass that asked.
     radio().queueStarts = true;
@@ -358,6 +359,7 @@ TEST_F(TickTest, BondedPriorityPolicyIsArmedOnceBeforeTheFirstPoll) {
 
 TEST_F(TickTest, FirstPolicyAndEmptyPriorityArePropagatedToRadio) {
   config.pick = 1;
+  config.peerAddr[0] = '\0';
   running();
   pass(fake::reading());
   EXPECT_EQ(radio().armedPick, 1);

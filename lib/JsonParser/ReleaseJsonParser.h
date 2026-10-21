@@ -1,9 +1,9 @@
 #pragma once
 
+#include <StreamingJsonParser.h>
+
 #include <cstddef>
 #include <cstdint>
-
-#include "StreamingJsonParser.h"
 
 namespace cross_twins {
 inline constexpr char firmwareRepository[] = "meat-holic/CrossTwins";

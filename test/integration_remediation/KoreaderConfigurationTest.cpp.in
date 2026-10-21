@@ -1,0 +1,160 @@
+#include <ArduinoJson.h>
+#include <HttpHeader.h>
+#include <gtest/gtest.h>
+#include <algorithm>
+#include <array>
+#include <cstdint>
+#include <cstdio>
+#include <cstdarg>
+#include <cstring>
+#include <limits>
+#include <map>
+#include <memory>
+#include <mutex>
+#include <optional>
+#include <set>
+#include <string>
+#include <utility>
+#include <vector>
+#include <variant>
+std::string testLogs;
+void logMessage(const char*,const char* format,...){char out[4096];va_list args;va_start(args,format);vsnprintf(out,sizeof out,format,args);va_end(args);testLogs+=out;}
+#define LOG_DBG(...) logMessage(__VA_ARGS__)
+#define LOG_ERR(...) logMessage(__VA_ARGS__)
+struct String:std::string{
+ using std::string::string;
+ String(const std::string& s):std::string(s){}
+ bool reserve(size_t n){std::string::reserve(n);return true;}
+ bool isEmpty()const{return empty();}
+ size_t write(uint8_t c){push_back(static_cast<char>(c));return 1;}
+ size_t write(const uint8_t* p,size_t n){append(reinterpret_cast<const char*>(p),n);return n;}
+};
+struct {
+ std::map<std::string,std::string> files;
+ std::set<std::string> failRenameFrom;
+ bool failWrite=false;
+ bool exists(const char* p) const{return files.contains(p);}
+ bool mkdir(const char*){return true;}
+ bool writeFile(const char* p,const String& value){if(failWrite)return false;files[p]=value;return true;}
+ bool rename(const char* from,const char* to){if(failRenameFrom.contains(from)||!exists(from)||exists(to))return false;files[to]=std::move(files[from]);files.erase(from);return true;}
+ bool remove(const char* p){return files.erase(p)!=0;}
+} Storage;
+namespace obfuscation {
+ std::string obfuscateToBase64(const std::string& value){return "fixture:"+value;}
+ std::string deobfuscateFromBase64(const std::string& value){return value.starts_with("fixture:")?value.substr(8):"";}
+}
+struct MD5Builder {void begin(){}void add(const char*){}void calculate(){}String toString(){return "fixture-md5";}};
+@PERSIST_HEADER@
+bool PersistableStoreBase::readDocFromFile(const char* path,JsonDocument& doc){return Storage.exists(path)&&deserializeJson(doc,Storage.files.at(path))==DeserializationError::Ok;}
+bool PersistableStoreBase::writeDocToFile(const char* path,const JsonDocument& doc){std::string value;serializeJson(doc,value);return Storage.writeFile(path,String(value));}
+std::string PersistableStoreBase::extractPassword(JsonVariantConst d,bool& resave){if(d["password_obf"].is<const char*>())return obfuscation::deobfuscateFromBase64(d["password_obf"].as<std::string>());resave=true;return d["password"]|"";}
+#define private public
+@CREDENTIAL_HEADER@
+#undef private
+@CREDENTIAL_SOURCE@
+#undef KOREADER_STORE
+KOReaderCredentialStore* testStore=nullptr;
+#define KOREADER_STORE (*testStore)
+@CLIENT_HEADER@
+std::string sentBody,sentUrl;
+struct{uint32_t getFreeHeap(){return 128*1024;}}ESP;
+constexpr const char* DEVICE_NAME="fixture",*DEVICE_ID="fixture-id";
+bool insufficientHeap(){return false;}
+namespace freeink {
+ struct SecureHttpClient {
+  void setInsecure(){}bool begin(const std::string& url){sentUrl=url;return true;}
+  void addHeader(const char*,const char*){}void end(){}
+  int sendRequest(const char*,const std::string& body){sentBody=body;return 200;}
+ };
+}
+void applyAuthHeaders(freeink::SecureHttpClient&){}
+void applyCustomHeaders(freeink::SecureHttpClient&){}
+int KOReaderSyncClient::lastHttpCode=0;
+@UPDATE_PROGRESS@
+KOReaderProgress progressForUpload(){
+ KOReaderProgress progress{};progress.document="fixture-hash";progress.progress="/fixture";progress.percentage=0.5f;
+ struct Epub{std::string getTitle(){return "synthetic private title";}std::string getAuthor(){return "synthetic author";}};
+ std::unique_ptr<Epub> epub;std::string epubPath="/fixture.txt";
+ auto ensureEpubLoaded=[&]{epub=std::make_unique<Epub>();};
+ @UPLOAD_METADATA@
+ return progress;
+}
+struct KoreaderConfiguration:testing::Test {
+ KOReaderCredentialStore store;
+ void SetUp()override{Storage={};testStore=&store;sentBody.clear();testLogs.clear();}
+ JsonDocument saved(){JsonDocument doc;EXPECT_EQ(deserializeJson(doc,Storage.files.at(store.getFilePath())),DeserializationError::Ok);return doc;}
+};
+TEST_F(KoreaderConfiguration, MissingFileKeepsMetadataOptInOff){EXPECT_FALSE(store.loadFromFile());EXPECT_FALSE(store.getSendMetadata());}
+TEST_F(KoreaderConfiguration, ExplicitMetadataChoicesAndMissingFieldSurviveV2MigrationAndReload){
+ for(int choice:{-1,0,1}){Storage={};JsonDocument doc;doc["cfgVersion"]=2;doc["username"]="fixture-user";doc["password_obf"]="fixture:fixture-password";if(choice>=0)doc["sendMetadata"]=choice!=0;std::string value;serializeJson(doc,value);Storage.files[store.getFilePath()]=value;
+ ASSERT_TRUE(store.loadFromFile());EXPECT_EQ(store.getSendMetadata(),choice==1);EXPECT_EQ(saved()["cfgVersion"].as<int>(),3);KOReaderCredentialStore restarted;ASSERT_TRUE(restarted.loadFromFile());EXPECT_EQ(restarted.getSendMetadata(),choice==1);EXPECT_EQ(restarted.getPassword(),"fixture-password");}
+}
+TEST_F(KoreaderConfiguration, FreshSyncPayloadHasNoMetadataWithoutOptIn){
+ store.loadFromFile();store.setCredentials("fixture-user","fixture-password");ASSERT_EQ(KOReaderSyncClient::updateProgress(progressForUpload()),KOReaderSyncClient::OK);JsonDocument doc;ASSERT_EQ(deserializeJson(doc,sentBody),DeserializationError::Ok);EXPECT_TRUE(doc["metadata"].isNull());
+}
+TEST_F(KoreaderConfiguration, V2CustomAndLegacyDefaultsKeepTheirProfilesAndCredentials){
+ for(auto version:{1,2}){JsonDocument doc;doc["cfgVersion"]=version;doc["username"]="fixture-user";doc["password_obf"]="fixture:fixture-password";if(version==2)doc["serverUrl"]="https://custom.invalid";ASSERT_TRUE(store.fromJson(doc.as<JsonVariantConst>()));EXPECT_EQ(store.getServerType(),KOReaderServerType::KOSYNC);ASSERT_TRUE(store.saveToFile());KOReaderCredentialStore restarted;ASSERT_TRUE(restarted.loadFromFile());EXPECT_EQ(restarted.getServerType(),KOReaderServerType::KOSYNC);EXPECT_EQ(restarted.getUsername(),"fixture-user");}
+}
+TEST_F(KoreaderConfiguration, ProfileControlsActualSerializedPositionPayload){
+ store.setCredentials("fixture-user","fixture-password");
+ for(auto type:{KOReaderServerType::CROSSPOINT,KOReaderServerType::KOSYNC,KOReaderServerType::OTHER}){store.setServerType(type);KOReaderProgress progress{};progress.document="fixture";progress.position=KOReaderRichPosition{};ASSERT_EQ(KOReaderSyncClient::updateProgress(progress),KOReaderSyncClient::OK);JsonDocument doc;ASSERT_EQ(deserializeJson(doc,sentBody),DeserializationError::Ok);EXPECT_EQ(!doc["position"].isNull(),type!=KOReaderServerType::KOSYNC);}
+}
+TEST_F(KoreaderConfiguration, MetadataOptInDoesNotPutBookDetailsInLogs){
+ store.setCredentials("fixture-user","fixture-password");store.setSendMetadata(true);ASSERT_EQ(KOReaderSyncClient::updateProgress(progressForUpload()),KOReaderSyncClient::OK);EXPECT_EQ(testLogs.find("synthetic private title"),std::string::npos);EXPECT_EQ(testLogs.find("synthetic author"),std::string::npos);EXPECT_EQ(testLogs.find("fixture-password"),std::string::npos);
+}
+
+TEST_F(KoreaderConfiguration, ConfirmedPairsPreserveExplicitProfilesAfterReloadAndPayload){
+ store.setCredentials("fixture-user","fixture-password");store.setSendMetadata(true);
+ ASSERT_TRUE(store.saveToFile());
+ for(auto type:{KOReaderServerType::CROSSPOINT,KOReaderServerType::KOSYNC,KOReaderServerType::OTHER}){
+   const std::string url=type==KOReaderServerType::CROSSPOINT?"":"https://custom.invalid/base";
+   ASSERT_TRUE(store.saveServerConfiguration(url,type));
+   KOReaderCredentialStore restarted;ASSERT_TRUE(restarted.loadFromFile());EXPECT_EQ(restarted.getServerUrl(),url);EXPECT_EQ(restarted.getServerType(),type);EXPECT_TRUE(restarted.getSendMetadata());EXPECT_EQ(restarted.getPassword(),"fixture-password");
+   testStore=&restarted;KOReaderProgress progress{};progress.document="fixture";progress.position=KOReaderRichPosition{};
+   ASSERT_EQ(KOReaderSyncClient::updateProgress(progress),KOReaderSyncClient::OK);JsonDocument sent;ASSERT_EQ(deserializeJson(sent,sentBody),DeserializationError::Ok);EXPECT_EQ(!sent["position"].isNull(),type!=KOReaderServerType::KOSYNC);testStore=&store;
+ }
+}
+TEST_F(KoreaderConfiguration, InvalidPairAndWriteOrRenameFailurePreserveOriginalMemoryAndFile){
+ store.setCredentials("fixture-user","fixture-password");store.setServerUrl("https://old.invalid");store.setServerType(KOReaderServerType::OTHER);ASSERT_TRUE(store.saveToFile());const auto original=Storage.files.at(store.getFilePath());
+ for(const auto& url:{"https://", "ftp://host", "https://bad host", "https://host:0", "https://host:65536", "https://host/path?secret", "https://user@host"})EXPECT_FALSE(store.saveServerConfiguration(url,KOReaderServerType::KOSYNC));
+ EXPECT_FALSE(store.saveServerConfiguration("https://new.invalid",static_cast<KOReaderServerType>(255)));
+ Storage.failWrite=true;EXPECT_FALSE(store.saveServerConfiguration("https://new.invalid",KOReaderServerType::KOSYNC));Storage.failWrite=false;
+ for(const auto& fail:{std::string(store.getFilePath()),std::string("/.crosspoint/koreader.json.server")}){Storage.failRenameFrom.insert(fail);EXPECT_FALSE(store.saveServerConfiguration("https://new.invalid",KOReaderServerType::KOSYNC));Storage.failRenameFrom.clear();EXPECT_EQ(Storage.files.at(store.getFilePath()),original);}
+ EXPECT_EQ(store.getServerUrl(),"https://old.invalid");EXPECT_EQ(store.getServerType(),KOReaderServerType::OTHER);
+ EXPECT_EQ(Storage.files.size(),1u);EXPECT_EQ(Storage.files.at(store.getFilePath()),original);
+}
+TEST_F(KoreaderConfiguration, ExistingV3ReadAndResaveNeverInfersProfileFromUrl){
+ for(auto type:{KOReaderServerType::CROSSPOINT,KOReaderServerType::KOSYNC,KOReaderServerType::OTHER}){JsonDocument doc;doc["cfgVersion"]=3;doc["serverUrl"]="https://custom.invalid";doc["serverType"]=static_cast<uint8_t>(type);ASSERT_TRUE(store.fromJson(doc.as<JsonVariantConst>()));ASSERT_TRUE(store.saveToFile());KOReaderCredentialStore restarted;ASSERT_TRUE(restarted.loadFromFile());EXPECT_EQ(restarted.getServerType(),type);EXPECT_EQ(restarted.getServerUrl(),"https://custom.invalid");}
+}
+TEST_F(KoreaderConfiguration, PendingRecoveryFilesAreNeverOverwritten){
+ store.setServerUrl("https://old.invalid");ASSERT_TRUE(store.saveToFile());
+ for(const auto* file:{"/.crosspoint/koreader.json.server","/.crosspoint/koreader.json.server.tmp","/.crosspoint/koreader.json.server.bak"}){Storage.files[file]="recovery";auto before=Storage.files;EXPECT_FALSE(store.saveServerConfiguration("https://new.invalid",KOReaderServerType::KOSYNC));EXPECT_EQ(Storage.files,before);Storage.files.erase(file);}
+}
+enum class StrId{STR_SERVER_TYPE};
+constexpr StrId serverTypeNames[]{StrId::STR_SERVER_TYPE,StrId::STR_SERVER_TYPE,StrId::STR_SERVER_TYPE};
+constexpr int SERVER_TYPE_ITEMS=3,STR_SYNC_SERVER_URL=1,STR_FAILED_LOWER=2;
+const char* tr(int){return "label";}
+enum class InputType{Url};
+struct KeyboardResult{std::string text;};
+struct ActivityResult{bool isCancelled=false;std::variant<KeyboardResult> data;};
+struct KeyboardEntryActivity{template<class...A> explicit KeyboardEntryActivity(A&&...){}};
+struct{int errors=0;void drawPopup(int,const char*){++errors;}}GUI;
+struct UrlEditor {
+ struct RenderLock { explicit RenderLock(UrlEditor&) {} };
+ int renderer=0,mappedInput=0;
+ std::function<void(const ActivityResult&)> keyboard;
+ struct Popup{int selected=-1;std::function<void(int)> confirm;void show(StrId,const StrId*,int,int value,std::function<void(int)> cb){selected=value;confirm=std::move(cb);}} optionPopup;
+ void requestUpdate(){}
+ void startActivityForResult(std::unique_ptr<KeyboardEntryActivity>,std::function<void(const ActivityResult&)> cb){keyboard=std::move(cb);}
+ void edit(){ @URL_EDITOR@ }
+ void answer(const std::string& url,bool cancel=false){keyboard(ActivityResult{cancel,KeyboardResult{url}});}
+};
+TEST_F(KoreaderConfiguration, DeviceUrlEditorRequiresConfirmationDefaultsToExistingProfileAndCancelsWithoutMutation){
+ store.setServerUrl("https://old.invalid");store.setServerType(KOReaderServerType::OTHER);ASSERT_TRUE(store.saveToFile());const auto before=Storage.files;
+ UrlEditor ui;ui.edit();ui.answer("https://new.invalid",true);EXPECT_FALSE(ui.optionPopup.confirm);EXPECT_EQ(Storage.files,before);
+ ui.edit();ui.answer("https://new.invalid");ASSERT_TRUE(ui.optionPopup.confirm);EXPECT_EQ(ui.optionPopup.selected,2);EXPECT_EQ(store.getServerUrl(),"https://old.invalid");EXPECT_EQ(Storage.files,before);
+ ui.optionPopup.confirm(1);EXPECT_EQ(store.getServerUrl(),"https://new.invalid");EXPECT_EQ(store.getServerType(),KOReaderServerType::KOSYNC);KOReaderCredentialStore restarted;ASSERT_TRUE(restarted.loadFromFile());EXPECT_EQ(restarted.getServerType(),KOReaderServerType::KOSYNC);
+}
+TEST_F(KoreaderConfiguration, DeviceInvalidUrlDoesNotOpenConfirmationOrChangeEitherValue){
+ store.setServerUrl("https://old.invalid");UrlEditor ui;ui.edit();ui.answer("https://bad host");EXPECT_FALSE(ui.optionPopup.confirm);EXPECT_EQ(store.getServerUrl(),"https://old.invalid");EXPECT_EQ(store.getServerType(),KOReaderServerType::CROSSPOINT);
+}

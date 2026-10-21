@@ -9,7 +9,7 @@
 #include <Memory.h>
 #include <ReleaseJsonParser.h>
 #include <esp_ota_ops.h>
-#include <esp_wifi.h>
+#include "WifiPowerSaveGuard.h"
 // clang-format on
 
 #include <algorithm>
@@ -29,7 +29,7 @@ OtaUpdater::OtaUpdaterError OtaUpdater::checkForUpdate() {
   updateAvailable = false;
   latestVersion.clear();
   otaUrl.clear();
-  otaSize = totalSize = 0;
+  otaSize = totalSize = processedSize = 0;
   LOG_DBG("OTA", "Checking CrossTwins releases (current: %s)", CROSSPOINT_VERSION);
 
   // This OTA path selects the combined X3/X4 application; other boards are excluded.
@@ -126,15 +126,22 @@ OtaUpdater::OtaUpdaterError OtaUpdater::installUpdate(ProgressCallback onProgres
     return INTERNAL_UPDATE_ERROR;
   }
 
+  if (otaSize < 14 || otaSize > updatePartition->size) {
+    LOG_ERR("OTA", "Asset size %zu does not fit OTA partition %zu", otaSize,
+            static_cast<size_t>(updatePartition->size));
+    return INTERNAL_UPDATE_ERROR;
+  }
+  processedSize = 0;
+  totalSize = otaSize;
   esp_ota_handle_t otaHandle = 0;
-  esp_err_t esp_err = esp_ota_begin(updatePartition, OTA_SIZE_UNKNOWN, &otaHandle);
+  esp_err_t esp_err = esp_ota_begin(updatePartition, otaSize, &otaHandle);
   if (esp_err != ESP_OK) {
     LOG_ERR("OTA", "esp_ota_begin failed: %s", esp_err_to_name(esp_err));
     return INTERNAL_UPDATE_ERROR;
   }
 
   /* For better timing and connectivity, we disable power saving for WiFi */
-  esp_wifi_set_ps(WIFI_PS_NONE);
+  WifiPowerSaveGuard powerSave;
 
   processedSize = 0;
   int lastReportedPct = -1;
@@ -145,6 +152,8 @@ OtaUpdater::OtaUpdaterError OtaUpdater::installUpdate(ProgressCallback onProgres
   uint8_t hdr[14];
   size_t hdrLen = 0;
   bool wrongChip = false;
+  bool sizeMismatch = false;
+  size_t received = 0;
   // All S3 boards share a chip_id, so also scan the stream for the embedded
   // board tag (FirmwareBoardTag.h). An untagged image passes; a tag naming a
   // different board aborts the download. The wrong image may partially land in
@@ -152,6 +161,12 @@ OtaUpdater::OtaUpdaterError OtaUpdater::installUpdate(ProgressCallback onProgres
   // the boot target.
   board_tag::Scanner tagScanner;
   const bool fetchOk = HttpDownloader::fetchUrl(otaUrl, [&](const uint8_t* data, size_t len) {
+    if (len > otaSize - received) {
+      sizeMismatch = true;
+      return false;
+    }
+    received += len;
+    const size_t headerTake = hdrLen < sizeof(hdr) ? std::min(len, sizeof(hdr) - hdrLen) : 0;
     if (hdrLen < sizeof(hdr)) {
       const size_t take = std::min(len, sizeof(hdr) - hdrLen);
       std::memcpy(hdr + hdrLen, data, take);
@@ -160,7 +175,7 @@ OtaUpdater::OtaUpdaterError OtaUpdater::installUpdate(ProgressCallback onProgres
         uint16_t imageChip;
         std::memcpy(&imageChip, hdr + 12, sizeof(imageChip));
         const uint16_t deviceChip = firmware_flash::runningPartitionChipId();
-        if (deviceChip != 0xFFFF && imageChip != deviceChip) {
+        if (hdr[0] != 0xE9 || deviceChip == 0xFFFF || imageChip != deviceChip) {
           LOG_ERR("OTA", "wrong chip: image=0x%04X device=0x%04X", imageChip, deviceChip);
           wrongChip = true;
           return false;  // abort the transfer
@@ -173,11 +188,19 @@ OtaUpdater::OtaUpdaterError OtaUpdater::installUpdate(ProgressCallback onProgres
               static_cast<int>(board_tag::boardNameLen()), board_tag::boardName());
       return false;  // abort the transfer
     }
-    if (esp_ota_write(otaHandle, data, len) != ESP_OK) {
+    if (hdrLen < sizeof(hdr)) return true;
+    // A split header must be validated before any bytes are written.
+    if (processedSize == 0 && esp_ota_write(otaHandle, hdr, sizeof(hdr)) != ESP_OK) {
+      flashOk = false;
+      return false;
+    }
+    const size_t offset = processedSize == 0 ? headerTake : 0;
+    if (len > offset && esp_ota_write(otaHandle, data + offset, len - offset) != ESP_OK) {
       flashOk = false;
       return false;  // abort the transfer
     }
-    processedSize += len;
+    if (processedSize == 0) processedSize = sizeof(hdr);
+    processedSize += len - offset;
     // Fire the callback only on whole-percent change. Per-chunk updates wake the
     // render task, whose framebuffer work contends with TLS on the internal arena,
     // and e-ink can't repaint faster than a percent tick anyway.
@@ -192,7 +215,7 @@ OtaUpdater::OtaUpdaterError OtaUpdater::installUpdate(ProgressCallback onProgres
   });
 
   /* Return back to default power saving for WiFi in case of failing */
-  esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
+  // powerSave restores the original policy on every return.
 
   if (wrongChip || tagScanner.mismatch()) {
     LOG_ERR("OTA", "Firmware install aborted: wrong device");
@@ -200,8 +223,9 @@ OtaUpdater::OtaUpdaterError OtaUpdater::installUpdate(ProgressCallback onProgres
     return WRONG_DEVICE_ERROR;
   }
 
-  if (!fetchOk || !flashOk) {
-    LOG_ERR("OTA", "Firmware install failed (%s)", flashOk ? "download" : "flash write");
+  if (!fetchOk || !flashOk || sizeMismatch || processedSize != otaSize) {
+    LOG_ERR("OTA", "Firmware install failed (%s), wrote %zu/%zu, HTTP %d", flashOk ? "download/size" : "flash write",
+            processedSize, otaSize, HttpDownloader::lastStatus());
     esp_ota_abort(otaHandle);
     return flashOk ? HTTP_ERROR : INTERNAL_UPDATE_ERROR;
   }

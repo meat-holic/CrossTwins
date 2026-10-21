@@ -69,7 +69,7 @@ void CrossPointWebServerActivity::onEnter() {
 
   // Heap-critical transition: WiFi (~45KB) plus the web server have to fit in
   // what's left of the ~380KB parts. SD-font caches retained for the CJK UI
-  // fallback (mini glyph/kern arenas, kern class tables) are rebuildable on
+  // fallback (mini glyph/kern arenas, ligature tables) are rebuildable on
   // demand — release them up front instead of aborting in startWebServer()
   // when the heap comes up short (observed on X3 with a Korean SD font).
   if (auto* fcm = renderer.getFontCacheManager()) {
@@ -85,6 +85,14 @@ void CrossPointWebServerActivity::onEnter() {
   connectedSSID.clear();
   lastHandleClientTime = 0;
   requestUpdate();
+
+  if (startInJoinNetwork) {
+    // Came back from the heap-defrag reboot on a pristine heap: skip the mode
+    // picker and go straight into Join Network (onNetworkModeSelected won't
+    // reboot again while this flag is set).
+    onNetworkModeSelected(NetworkMode::JOIN_NETWORK);
+    return;
+  }
 
   // Launch network mode selection subactivity
   LOG_DBG("WEBACT", "Launching NetworkModeSelectionActivity...");
@@ -106,6 +114,10 @@ void CrossPointWebServerActivity::onExit() {
   state = WebServerActivityState::SHUTTING_DOWN;
   stopDnsServer();
   MDNS.end();
+
+  // Web uploads may have installed or removed plugins. Non-touch devices
+  // reboot below (setup() re-reads everything), but touch devices end the
+  // session in place, so re-read event subscriptions here.
 
   // Skip reboot if WiFi was never activated (e.g. user backed out of mode selection).
   if (WiFi.getMode() != WIFI_MODE_NULL) {
@@ -296,6 +308,12 @@ void CrossPointWebServerActivity::startWebServer() {
     state = WebServerActivityState::SERVER_RUNNING;
     LOG_DBG("WEBACT", "Web server started successfully");
     lastWifiBars = isApMode ? 0 : barsForRssi(WiFi.RSSI(), 0);
+
+    // The device is online: deliver queued plugin events through their
+    // manifest handlers. STA only (AP mode has no internet route); bounded by
+    // the drain's per-call event budget so serving is not noticeably delayed.
+    if (!isApMode) {
+    }
 
     // Force an immediate render since we're transitioning from a subactivity
     // that had its own rendering task. We need to make sure our display is shown.

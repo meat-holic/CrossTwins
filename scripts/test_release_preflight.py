@@ -65,13 +65,27 @@ class PreflightContracts(unittest.TestCase):
 
     def test_sdk_pin_matches_gitlink_and_rejects_previous_revision(self):
         root = Path(__file__).resolve().parents[1]
-        link = subprocess.check_output(["git", "ls-tree", "HEAD", "freeink-sdk"],
+        # During an uncommitted integration HEAD still names the stable parent.
+        # Require a resolved, exact index pin; committed/release checkouts must
+        # additionally match HEAD. prepare() always checks HEAD, never the index.
+        link = subprocess.check_output(["git", "ls-files", "--stage", "freeink-sdk"],
                                        cwd=root, text=True).split()
-        self.assertEqual(link[:2], ["160000", "commit"])
-        self.assertEqual(SDK_SHA, link[2])
+        self.assertEqual(len(link), 4)
+        self.assertEqual((link[0], link[2], link[3]), ("160000", "0", "freeink-sdk"))
+        self.assertEqual(SDK_SHA, link[1])
+        merging = subprocess.run(["git", "rev-parse", "--verify", "MERGE_HEAD"], cwd=root,
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
+        if not merging:
+            committed = subprocess.check_output(["git", "ls-tree", "HEAD", "freeink-sdk"],
+                                                cwd=root, text=True).split()
+            self.assertEqual(committed[:2], ["160000", "commit"])
+            self.assertEqual(SDK_SHA, committed[2])
         with self.assertRaisesRegex(ValueError, "SDK gitlink differs from approved revision"):
             context(REPOSITORY, "v1.6.5-ct.5", SHA, SHA,
                     "539da34db67a546cad961525d7e9b6364dfa2fe4", "1.6.5", "1", "1")
+        with self.assertRaisesRegex(ValueError, "SDK gitlink differs from approved revision"):
+            context(REPOSITORY, "v1.6.5-ct.7", SHA, SHA,
+                    "0bbc42b84f568fa70b0e17d66a8609e4e7fc4b44", "1.6.5", "1", "1")
 
     def test_invalid_and_historical_inputs(self):
         for tag in ("v1.6.5-ct.1", "v1.6.5-ct.2", "1.6.5-ct.3", "v1.6.5-ct.03",
@@ -112,9 +126,18 @@ class PreflightContracts(unittest.TestCase):
             self.assertNotEqual(failed.returncode, 0)
             self.assertFalse(output.exists())
             passed = subprocess.run(command + ["--prerelease", "false"], cwd=root, capture_output=True, text=True)
-            self.assertEqual(passed.returncode, 0, passed.stderr)
-            self.assertEqual(json.loads(output.read_text())["mode"], "local")
-            self.assertIn("firmware_suffix=-ct.3", passed.stdout)
+            merging = subprocess.run(["git", "rev-parse", "--verify", "MERGE_HEAD"], cwd=root,
+                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
+            if merging:
+                # An approved index pin is not a committed release provenance.
+                # Even --local must reject the candidate checkout against stable HEAD.
+                self.assertNotEqual(passed.returncode, 0)
+                self.assertIn("SDK checkout mismatch", passed.stderr)
+                self.assertFalse(output.exists())
+            else:
+                self.assertEqual(passed.returncode, 0, passed.stderr)
+                self.assertEqual(json.loads(output.read_text())["mode"], "local")
+                self.assertIn("firmware_suffix=-ct.3", passed.stdout)
 
     def test_workflow_permissions_provenance_and_bundle_gate(self):
         workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/release.yml").read_text()

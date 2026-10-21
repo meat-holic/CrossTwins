@@ -10,6 +10,10 @@
 
 inline std::vector<uint8_t> sdFontTestFile;
 inline size_t sdFontTestReads = 0;
+inline size_t sdFontTestClassReadStart = SIZE_MAX, sdFontTestClassReadEnd = 0;
+inline size_t sdFontTestClassReads = 0;
+inline size_t sdFontTestFailClassReadNumber = SIZE_MAX;
+inline size_t sdFontTestFailReadAt = SIZE_MAX;
 inline bool sdFontTestReadFailure = false;
 inline bool sdFontTestOpenFailure = false;
 inline bool sdFontTestHandleFailure = false;
@@ -41,8 +45,12 @@ class HalFile {
     return state->opened && position <= sdFontTestFile.size();
   }
   int read(void* output, size_t count) {
-    if (sdFontTestReadFailure) return 0;
+    if (sdFontTestReadFailure || (state && state->position == sdFontTestFailReadAt)) return 0;
     if (!state->opened || state->position > sdFontTestFile.size()) return 0;
+    if (state->position >= sdFontTestClassReadStart && state->position < sdFontTestClassReadEnd) ++sdFontTestClassReads;
+    if (sdFontTestClassReads == sdFontTestFailClassReadNumber && state->position >= sdFontTestClassReadStart &&
+        state->position < sdFontTestClassReadEnd)
+      return 0;
     count = std::min(count, sdFontTestFile.size() - state->position);
     std::memcpy(output, sdFontTestFile.data() + state->position, count);
     state->position += count;

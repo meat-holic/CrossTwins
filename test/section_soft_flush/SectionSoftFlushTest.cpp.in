@@ -1,8 +1,11 @@
 #include <HalStorage.h>
 #include <Serialization.h>
 #include <gtest/gtest.h>
+#include <array>
 #include <chrono>
 #include <filesystem>
+#include <fstream>
+#include <vector>
 #include <string>
 #ifdef _WIN32
 #include <process.h>
@@ -10,15 +13,22 @@
 #include <unistd.h>
 #endif
 #define LOG_ERR(...) ((void)0)
+#define LOG_DBG(...) ((void)0)
 @SECTION_VERSIONS@
 struct ReaderRenderSpec {};
 struct Section {
   std::string filePath;
   HalFile file;
   bool cleared = false, wasPartial = false;
-  void clearCache() { cleared = true; Storage.remove(filePath); }
+  uint16_t pageCount = 0, partialPageCount_ = 0;
+  uint32_t partialBytesConsumed_ = 0, partialTotalBytes_ = 0;
+  bool partial_ = false;
+  bool clearCache() { cleared = true; return clearCacheImpl(); }
+  bool clearCacheImpl() const;
+  std::string binTmpPath() const { return filePath + ".part"; }
   bool loadSectionFile(const ReaderRenderSpec&);
 };
+@SECTION_CLEAR@
 // Unchanged production open/read/version-validation prefix. Other layout-header
 // fields and LUT loading are outside this focused compatibility test.
 @SECTION_GATE@
@@ -31,6 +41,7 @@ class SectionSoftFlush : public testing::Test {
   Section section;
   std::filesystem::path tempDirectory;
   bool ownsTempDirectory = false;
+  std::vector<std::filesystem::path> ownedStateFiles;
   void SetUp() override {
 #ifdef _WIN32
     const auto processId = _getpid();
@@ -54,6 +65,10 @@ class SectionSoftFlush : public testing::Test {
     std::error_code error;
     std::filesystem::remove(section.filePath, error);
     EXPECT_FALSE(error) << error.message();
+    for (const auto& path : ownedStateFiles) {
+      std::filesystem::remove(path, error);
+      EXPECT_FALSE(error) << error.message();
+    }
     // Remove only our file and the now-empty directory, never recursively delete other files.
     const bool removed = std::filesystem::remove(tempDirectory, error);
     EXPECT_FALSE(error) << error.message();
@@ -63,23 +78,25 @@ class SectionSoftFlush : public testing::Test {
     HalFile file;
     ASSERT_TRUE(file.open(section.filePath.c_str(), "wb"));
     serialization::writePod(file, version);
+    const std::array<uint8_t, HEADER_SIZE - 1> rest{};
+    ASSERT_EQ(file.write(rest.data(), rest.size()), rest.size());
   }
 };
 TEST_F(SectionSoftFlush, CurrentFinalizedVersionPassesProductionGate) {
-  EXPECT_EQ(SECTION_FILE_VERSION, 51);
+  EXPECT_EQ(SECTION_FILE_VERSION, 128);
   write(SECTION_FILE_VERSION);
   EXPECT_TRUE(section.loadSectionFile({}));
   EXPECT_FALSE(section.cleared);
   EXPECT_FALSE(section.wasPartial);
 }
 TEST_F(SectionSoftFlush, CurrentPartialVersionMovesInLockstep) {
-  EXPECT_EQ(SECTION_FILE_PARTIAL_VERSION, 231);
+  EXPECT_EQ(SECTION_FILE_PARTIAL_VERSION, 154);
   write(SECTION_FILE_PARTIAL_VERSION);
   EXPECT_TRUE(section.loadSectionFile({}));
   EXPECT_TRUE(section.wasPartial);
 }
 TEST_F(SectionSoftFlush, OldFinalizedAndPartialCachesAreClosedAndInvalidated) {
-  for (uint8_t old : {50, 232}) {
+  for (uint8_t old : {0, 50, 51, 64, 218, 231, 232}) {
     write(old);
     EXPECT_FALSE(section.loadSectionFile({}));
     EXPECT_FALSE(section.file.isOpen());
@@ -95,4 +112,38 @@ TEST_F(SectionSoftFlush, InvalidatedCacheAcceptsRebuiltCurrentVersion) {
   write(SECTION_FILE_VERSION);
   EXPECT_TRUE(section.loadSectionFile({}));
   EXPECT_FALSE(section.cleared);
+}
+TEST_F(SectionSoftFlush, TruncatedCurrentHeaderIsClosedAndInvalidated) {
+  {
+    HalFile file;
+    ASSERT_TRUE(file.open(section.filePath.c_str(), "wb"));
+    serialization::writePod(file, SECTION_FILE_VERSION);
+  }
+  EXPECT_FALSE(section.loadSectionFile({}));
+  EXPECT_FALSE(section.file.isOpen());
+  EXPECT_TRUE(section.cleared);
+  EXPECT_FALSE(std::filesystem::exists(section.filePath));
+}
+TEST_F(SectionSoftFlush, InvalidationPreservesProgressBookmarksAndBookMetadata) {
+  for (const auto* name : {"progress.bin", "bookmarks.bin", "book.bin"}) {
+    const auto path = tempDirectory / name;
+    ASSERT_FALSE(std::filesystem::exists(path));
+    ownedStateFiles.push_back(path);
+    std::ofstream output(path, std::ios::binary);
+    output << "user-state-" << name;
+  }
+  {
+    std::ofstream output(section.binTmpPath(), std::ios::binary);
+    output << "interrupted build";
+  }
+  write(51);
+  ASSERT_FALSE(section.loadSectionFile({}));
+  EXPECT_FALSE(std::filesystem::exists(section.binTmpPath()));
+  for (const auto& path : ownedStateFiles) {
+    std::ifstream input(path, std::ios::binary);
+    const std::string bytes((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+    EXPECT_EQ(bytes, "user-state-" + path.filename().string());
+  }
+  write(SECTION_FILE_VERSION);
+  EXPECT_TRUE(section.loadSectionFile({}));
 }

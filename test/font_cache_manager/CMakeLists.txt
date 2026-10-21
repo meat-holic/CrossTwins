@@ -16,3 +16,11 @@ target_link_libraries(FontCacheManagerTest PRIVATE
 )
 
 gtest_discover_tests(FontCacheManagerTest)
+
+add_executable(FontCacheVectorTest VectorDispatchTest.cpp
+  ${REPO_ROOT}/lib/GfxRenderer/FontCacheManager.cpp ${REPO_ROOT}/lib/Utf8/Utf8.cpp)
+target_include_directories(FontCacheVectorTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/stubs
+  ${REPO_ROOT}/lib/GfxRenderer ${REPO_ROOT}/lib/Utf8)
+target_compile_definitions(FontCacheVectorTest PRIVATE CROSSPOINT_VECTOR_FONTS=1)
+target_link_libraries(FontCacheVectorTest PRIVATE crosspoint_test_common GTest::gtest_main)
+gtest_discover_tests(FontCacheVectorTest)

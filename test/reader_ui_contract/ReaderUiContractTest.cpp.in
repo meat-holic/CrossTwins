@@ -1,0 +1,292 @@
+#include <gtest/gtest.h>
+#include <algorithm>
+#include <cstring>
+#include <functional>
+#include <map>
+#include <memory>
+#include <set>
+#include <string>
+#include <utility>
+#include <vector>
+#define LOG_ERR(...) ((void)0)
+#define LOG_INF(...) ((void)0)
+#define LOG_DBG(...) ((void)0)
+using Bytes = std::vector<uint8_t>;
+struct StorageStub;
+struct HalFile {
+  std::string path;
+  size_t pos = 0;
+  bool opened = false;
+  ~HalFile() { if (opened) close(); }
+  explicit operator bool() const { return opened; }
+  bool close();
+  int read(void*, size_t);
+  size_t write(const uint8_t*, size_t);
+};
+struct StorageStub {
+  std::map<std::string, Bytes> files;
+  std::map<std::string, int> handles;
+  std::set<std::string> failRenameFrom;
+  bool failOpen = false, failRead = false, failClose = false, failRemove = false;
+  size_t writeLimit = SIZE_MAX;
+  bool exists(const char* p) const { return files.contains(p); }
+  bool openFileForRead(const char*, const std::string& p, HalFile& f) {
+    if (failOpen || !exists(p.c_str())) return false;
+    f.path = p; f.opened = true; ++handles[p]; return true;
+  }
+  bool openFileForWrite(const char*, const std::string& p, HalFile& f) {
+    if (failOpen) return false;
+    files[p].clear(); f.path = p; f.opened = true; ++handles[p]; return true;
+  }
+  bool rename(const char* from, const char* to) {
+    EXPECT_EQ(handles[from], 0); EXPECT_EQ(handles[to], 0);
+    if (failRenameFrom.contains(from) || !exists(from) || exists(to)) return false;
+    files[to] = std::move(files[from]); files.erase(from); return true;
+  }
+  bool remove(const char* p) { EXPECT_EQ(handles[p], 0); return !failRemove && files.erase(p) != 0; }
+} Storage;
+bool HalFile::close() {
+  EXPECT_TRUE(opened); if (opened) --Storage.handles[path]; opened = false;
+  return !Storage.failClose;
+}
+int HalFile::read(void* dst, size_t n) {
+  if (Storage.failRead) return -1;
+  n = std::min(n, Storage.files[path].size() - pos);
+  std::memcpy(dst, Storage.files[path].data() + pos, n); pos += n; return static_cast<int>(n);
+}
+size_t HalFile::write(const uint8_t* src, size_t n) {
+  n = std::min(n, Storage.writeLimit); Storage.files[path].insert(Storage.files[path].end(), src, src + n); return n;
+}
+namespace FsHelpers {
+bool hasPngExtension(const std::string& p) { return p.ends_with(".png"); }
+bool hasEpubExtension(const std::string& p) { return p.ends_with(".epub"); }
+bool hasXtcExtension(const std::string& p) { return p.ends_with(".xtc"); }
+bool hasTxtExtension(const std::string& p) { return p.ends_with(".txt"); }
+bool hasMarkdownExtension(const std::string& p) { return p.ends_with(".md"); }
+}
+bool failAllocation = false;
+template <class T, class... Args> std::unique_ptr<T> makeUniqueNoThrow(Args&&... args) {
+  return failAllocation ? nullptr : std::make_unique<T>(std::forward<Args>(args)...);
+}
+struct CrossPointSettings { enum SLEEP_SCREEN_MODE { STANDARD, CUSTOM, TRANSPARENT_CUSTOM }; };
+struct { int sleepScreen = CrossPointSettings::STANDARD, saves = 0; void saveToFile() { ++saves; } } SETTINGS;
+constexpr int STR_LOADING_POPUP = 1, STR_DONE = 2, STR_FAILED_LOWER = 3, STR_DELETE = 4, STR_LIBRARY_REBUILDING = 5;
+const char* tr(int) { return "message"; }
+struct Rect { int x = 13, y = 0, width = 444, height = 800; };
+struct Snapshot { int percent = 67; };
+struct {
+  Rect lastCover;
+  const Snapshot* snapshot = nullptr;
+  void drawPopup(int, const char*) {}
+  template <class T, class Callback>
+  void drawRecentBookCover(int, Rect r, const std::vector<T>&, int, bool&, bool&, bool, Callback,
+                          const Snapshot* progress) { lastCover = r; snapshot = progress; }
+} GUI;
+void delay(int) {}
+constexpr char CUSTOM_SLEEP_ROOT_BMP[] = "/sleep.bmp";
+constexpr char TRANSPARENT_SLEEP_ROOT_BMP[] = "/sleep-overlay.bmp";
+constexpr char TRANSPARENT_SLEEP_ROOT_PNG[] = "/sleep-overlay.png";
+constexpr size_t COPY_BUFFER_SIZE = 2048;
+@PROMOTE@
+struct BmpViewerActivity {
+  std::string filePath = "/image.bmp";
+  int renderer = 0, enters = 0;
+  bool canSetSleepCover() const { return true; }
+  void onEnter() { ++enters; }
+  void doSetSleepCover();
+};
+@COVER@
+
+std::vector<std::string> cleared;
+struct Epub {
+  std::string path;
+  Epub() = default;
+  Epub(const std::string& path, const char*) : path(path) {}
+  void clearCache() { cleared.push_back("epub:" + path); }
+  int resolveHrefToSpineIndex(const std::string& href) { return href == "valid.xhtml#note" ? 2 : -1; }
+};
+struct Txt {
+  std::string path;
+  Txt(const std::string& path, const char*) : path(path) {}
+  void clearCache() { cleared.push_back("txt:" + path); }
+};
+struct Xtc {
+  std::string path;
+  Xtc(const std::string& path, const char*) : path(path) {}
+  void clearCache() { cleared.push_back("xtc:" + path); }
+};
+@CACHE_HELPERS@
+struct RecentBook { std::string path; bool missing = false; };
+struct RecentBooksStore { static bool isMissing(const RecentBook& book) { return book.missing; } };
+struct {
+  std::vector<RecentBook> books;
+  int updates = 0;
+  int removed = 0, saves = 0;
+  bool removeByPath(const std::string&) { ++removed; return true; }
+  void saveToFile() { ++saves; }
+  const auto& getBooks() const { return books; }
+  void updatePath(const std::string&, const std::string&, const std::string&, const std::string&) { ++updates; }
+} RECENT_BOOKS;
+struct { std::string openEpubPath; int saves = 0; void saveToFile() { ++saves; } } APP_STATE;
+@MOVE@
+struct HomeActivity {
+  std::vector<RecentBook> recentBooks;
+  bool coverGridUi = false;
+  int renderer = 0, selectorIndex = 0;
+  int coverRectX = 0, coverRectY = 0, coverRectW = 0, coverRectH = 0;
+  bool coverRendered = false, coverBufferStored = false, bufferRestored = false, homeUsesSingleLyra = true;
+  Snapshot bookProgressSnapshot;
+  bool storeCoverBuffer() { return true; }
+  void loadRecentBooks(int maxBooks);
+  void coverGeometry();
+};
+@RECENTS@
+struct UITheme {
+  static UITheme& getInstance() { static UITheme t; return t; }
+  Rect getContentArea(int) { return {}; }
+};
+void HomeActivity::coverGeometry() {
+  struct { int homeRecentBooksCount = 3, contentSidePadding = 20, homeTopPadding = 100, homeCoverTileHeight = 300; } metrics;
+@HOME_TOUCH@
+  EXPECT_EQ(coverColumnWidth, 134);
+  EXPECT_EQ(recentCount, std::min(3, static_cast<int>(recentBooks.size())));
+@HOME_COVER@
+}
+struct RenderLock {
+  inline static int depth = 0;
+  RenderLock() { EXPECT_EQ(depth, 0); ++depth; }
+  template <class T> explicit RenderLock(T&) : RenderLock() {}
+  ~RenderLock() { --depth; }
+};
+struct EpubReaderActivity {
+  struct Position { int spineIndex = 0, pageNumber = 0; };
+  static constexpr int MAX_FOOTNOTE_DEPTH = 3;
+  Position savedPositions[MAX_FOOTNOTE_DEPTH];
+  int footnoteDepth = 0, currentSpineIndex = 1, nextPageNumber = 9, updates = 0;
+  std::shared_ptr<Epub> epub = std::make_shared<Epub>();
+  struct Section { int currentPage = 4; };
+  std::unique_ptr<Section> section = std::make_unique<Section>();
+  std::string pendingAnchor;
+  void clearDeferredReposition() {}
+  void requestUpdate() { ++updates; }
+  void navigateToHref(const std::string&, bool);
+};
+@HREF@
+namespace library { const char* libraryIndexPath() { return "library.idx"; } }
+struct ActivityResult { bool isCancelled = false; };
+struct ConfirmationActivity { ConfirmationActivity(int, int, const std::string&, const std::string&) {} };
+struct LibraryListActivity {
+  int renderer = 0, mappedInput = 0, rebuilds = 0, resets = 0, paints = 0;
+  struct {
+    bool opened = true;
+    void close() { opened = false; }
+    bool open(const char*) { opened = true; return true; }
+  } index;
+  std::function<void(const ActivityResult&)> callback;
+  void startActivityForResult(std::unique_ptr<ConfirmationActivity>, std::function<void(const ActivityResult&)> cb) { callback = std::move(cb); }
+  void swallowHeldReleases() {}
+  void resetAfterRebuild() { ++resets; }
+  void rebuildIndex() { ++rebuilds; }
+  void closeRouting() {}
+  void requestUpdate(bool = false) { ++paints; }
+  void promptDeleteBookByPath(const std::string&, const std::string&);
+};
+@DELETE_DIALOG@
+
+class ReaderUiContract : public testing::Test {
+ protected:
+  void SetUp() override { Storage = {}; SETTINGS = {}; RECENT_BOOKS = {}; APP_STATE = {}; GUI = {}; cleared.clear(); failAllocation = false; }
+  void TearDown() override { for (const auto& [path, n] : Storage.handles) EXPECT_EQ(n, 0) << path; }
+  void coverFixture() { Storage.files["/image.bmp"] = Bytes(4097, 7); Storage.files["/sleep.bmp"] = {1, 2, 3}; }
+};
+TEST_F(ReaderUiContract, CoverPromotionClosesHandlesAndReplacesCompleteContent) {
+  coverFixture(); BmpViewerActivity viewer; viewer.doSetSleepCover();
+  EXPECT_EQ(Storage.files["/sleep.bmp"], Storage.files["/image.bmp"]);
+  EXPECT_FALSE(Storage.exists("/sleep.bmp.tmp")); EXPECT_FALSE(Storage.exists("/sleep.bmp.bak"));
+  EXPECT_EQ(SETTINGS.saves, 1); EXPECT_EQ(viewer.enters, 1);
+}
+TEST_F(ReaderUiContract, CopyFailuresPreserveOldCoverAndSettings) {
+  for (int failure = 0; failure < 5; ++failure) {
+    Storage = {}; SETTINGS = {}; coverFixture(); failAllocation = false;
+    if (failure == 0) Storage.failOpen = true;
+    if (failure == 1) Storage.failRead = true;
+    if (failure == 2) Storage.writeLimit = 3;
+    if (failure == 3) Storage.failClose = true;
+    if (failure == 4) failAllocation = true;
+    BmpViewerActivity viewer; viewer.doSetSleepCover();
+    EXPECT_EQ(Storage.files["/sleep.bmp"], (Bytes{1, 2, 3})); EXPECT_EQ(SETTINGS.saves, 0);
+    for (const auto& [path, n] : Storage.handles) EXPECT_EQ(n, 0) << path;
+  }
+}
+TEST_F(ReaderUiContract, FailedPromotionRollsBackAndCanRetry) {
+  coverFixture(); Storage.failRenameFrom.insert("/sleep.bmp.tmp");
+  BmpViewerActivity viewer; viewer.doSetSleepCover();
+  EXPECT_EQ(Storage.files["/sleep.bmp"], (Bytes{1, 2, 3})); EXPECT_EQ(SETTINGS.saves, 0);
+  Storage.failRenameFrom.clear(); viewer.doSetSleepCover(); EXPECT_EQ(SETTINGS.saves, 1);
+}
+TEST_F(ReaderUiContract, FailedRollbackKeepsOldBackupAndRefusesToOverwriteIt) {
+  coverFixture(); Storage.failRenameFrom = {"/sleep.bmp.tmp", "/sleep.bmp.bak"};
+  BmpViewerActivity viewer; viewer.doSetSleepCover();
+  EXPECT_EQ(Storage.files["/sleep.bmp.bak"], (Bytes{1, 2, 3})); EXPECT_EQ(SETTINGS.saves, 0);
+  Storage.failRenameFrom.clear(); viewer.doSetSleepCover();
+  EXPECT_EQ(Storage.files["/sleep.bmp.bak"], (Bytes{1, 2, 3})); EXPECT_EQ(SETTINGS.saves, 0);
+}
+TEST_F(ReaderUiContract, FailedDeletionCannotDiscardReadingState) {
+  Storage.files["book.txt"] = {1}; Storage.failRemove = true;
+  EXPECT_FALSE(removeBookFile("book.txt")); EXPECT_TRUE(cleared.empty()); EXPECT_TRUE(Storage.exists("book.txt"));
+  Storage.failRemove = false; EXPECT_TRUE(removeBookFile("book.txt")); EXPECT_EQ(cleared, (std::vector<std::string>{"txt:book.txt"}));
+  Storage.files["book.md"] = {2}; EXPECT_TRUE(removeBookFile("book.md")); EXPECT_EQ(cleared.back(), "txt:book.md");
+}
+TEST_F(ReaderUiContract, DeleteDialogFailureReopensIndexWithoutChangingRecents) {
+  Storage.files["book.txt"] = {1}; Storage.failRemove = true;
+  LibraryListActivity library; library.promptDeleteBookByPath("book.txt", "book");
+  ASSERT_TRUE(library.callback); EXPECT_FALSE(library.index.opened);
+  library.callback({});
+  EXPECT_TRUE(library.index.opened); EXPECT_TRUE(cleared.empty()); EXPECT_EQ(RECENT_BOOKS.removed, 0);
+  EXPECT_EQ(library.rebuilds, 0); EXPECT_EQ(library.resets, 0); EXPECT_EQ(library.paints, 1);
+}
+TEST_F(ReaderUiContract, CancelledDeleteDialogReopensIndexAndPreservesSelection) {
+  LibraryListActivity library; library.promptDeleteBookByPath("book.txt", "book"); library.callback({true});
+  EXPECT_TRUE(library.index.opened); EXPECT_TRUE(cleared.empty()); EXPECT_EQ(RECENT_BOOKS.removed, 0);
+  EXPECT_EQ(library.resets, 0);
+}
+TEST_F(ReaderUiContract, ConfirmedDeleteRebuildsOnlyAfterSuccessfulSourceRemoval) {
+  Storage.files["book.txt"] = {1}; LibraryListActivity library;
+  library.promptDeleteBookByPath("book.txt", "book"); library.callback({});
+  EXPECT_TRUE(library.index.opened); EXPECT_FALSE(Storage.exists("book.txt"));
+  EXPECT_EQ(RECENT_BOOKS.removed, 1); EXPECT_EQ(library.rebuilds, 1); EXPECT_EQ(library.resets, 1);
+}
+TEST_F(ReaderUiContract, CacheMoveFailureRestoresBookAndLeavesRecentsUntouched) {
+  Storage.files["book.epub"] = {1}; Storage.files["old-cache"] = {2, 3};
+  APP_STATE.openEpubPath = "book.epub"; Storage.failRenameFrom.insert("old-cache");
+  moveFinishedBookToReadFolder("book.epub", "/read/book.epub", "old-cache");
+  EXPECT_TRUE(Storage.exists("book.epub")); EXPECT_TRUE(Storage.exists("old-cache"));
+  EXPECT_EQ(RECENT_BOOKS.updates, 0); EXPECT_EQ(APP_STATE.openEpubPath, "book.epub");
+  Storage.failRenameFrom.clear(); moveFinishedBookToReadFolder("book.epub", "/read/book.epub", "old-cache");
+  EXPECT_EQ(RECENT_BOOKS.updates, 1); EXPECT_EQ(APP_STATE.openEpubPath, "/read/book.epub");
+}
+TEST_F(ReaderUiContract, RecentBooksSkipDeletedEntriesAndRespectVisibleLimit) {
+  HomeActivity home; home.loadRecentBooks(4); EXPECT_TRUE(home.recentBooks.empty());
+  RECENT_BOOKS.books = {{"gone.epub", true}, {"a.txt"}, {"b.epub"}, {"c.xtc"}};
+  home.loadRecentBooks(2); ASSERT_EQ(home.recentBooks.size(), 2u);
+  EXPECT_EQ(home.recentBooks[0].path, "a.txt"); EXPECT_EQ(home.recentBooks[1].path, "b.epub");
+}
+TEST_F(ReaderUiContract, LyraSnapshotAndCoverTouchUseTheSameInsetContentArea) {
+  HomeActivity home;
+  home.coverGeometry();
+  EXPECT_EQ(GUI.lastCover.x, 13); EXPECT_EQ(home.coverRectX, 13); EXPECT_EQ(home.coverRectW, 444);
+  ASSERT_EQ(GUI.snapshot, &home.bookProgressSnapshot); EXPECT_EQ(GUI.snapshot->percent, 67);
+  home.homeUsesSingleLyra = false; home.coverGeometry(); EXPECT_EQ(GUI.snapshot, nullptr);
+}
+TEST_F(ReaderUiContract, InvalidHrefDoesNotPopAFullFootnoteStack) {
+  EpubReaderActivity reader; reader.footnoteDepth = reader.MAX_FOOTNOTE_DEPTH;
+  reader.navigateToHref("missing.xhtml", true);
+  EXPECT_EQ(reader.footnoteDepth, reader.MAX_FOOTNOTE_DEPTH); EXPECT_EQ(reader.currentSpineIndex, 1);
+  EXPECT_NE(reader.section, nullptr); EXPECT_EQ(reader.updates, 0);
+}
+TEST_F(ReaderUiContract, ReleasedChildPageStillSavesTheOriginAndAnchor) {
+  EpubReaderActivity reader; reader.section.reset(); reader.navigateToHref("valid.xhtml#note", true);
+  ASSERT_EQ(reader.footnoteDepth, 1); EXPECT_EQ(reader.savedPositions[0].spineIndex, 1);
+  EXPECT_EQ(reader.savedPositions[0].pageNumber, 9); EXPECT_EQ(reader.currentSpineIndex, 2);
+  EXPECT_EQ(reader.pendingAnchor, "note"); EXPECT_EQ(RenderLock::depth, 0);
+}

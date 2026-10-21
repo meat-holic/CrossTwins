@@ -9,7 +9,9 @@ inline constexpr StrId ACTION_LABELS[] = {StrId::STR_HOME_SHORTCUT, StrId::STR_I
                                           StrId::STR_FORCE_REFRESH, StrId::STR_FOOTNOTES,        StrId::STR_CONFIRM,
                                           StrId::STR_KOSYNC,        StrId::STR_BOOKMARK_OPTION,  StrId::STR_DICTIONARY,
                                           StrId::STR_READER_MENU,   StrId::STR_TOGGLE_FRONTLIGHT};
-static_assert(sizeof(ACTION_LABELS) / sizeof(ACTION_LABELS[0]) == static_cast<unsigned>(HomeButtonAction::Count));
+static_assert(sizeof(ACTION_LABELS) / sizeof(ACTION_LABELS[0]) ==
+              static_cast<unsigned>(HomeButtonAction::ToggleFrontlight) + 1);
+inline constexpr size_t ACTION_COUNT = sizeof(ACTION_LABELS) / sizeof(ACTION_LABELS[0]);
 inline constexpr StrId GESTURE_LABELS[] = {StrId::STR_HOME_BUTTON_TAP, StrId::STR_HOME_BUTTON_DOUBLE_TAP,
                                            StrId::STR_HOME_BUTTON_LONG_PRESS};
 inline constexpr uint8_t CrossPointSettings::* FIELDS[] = {&CrossPointSettings::homeButtonTapAction,

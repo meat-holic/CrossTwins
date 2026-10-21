@@ -210,25 +210,28 @@ bool writeNormalizedXhtml(const std::string& html, HalFile& file) {
 
 bool buildDictionaryHtmlPages(GfxRenderer& renderer, const std::string& definition, const uint16_t viewportWidth,
                               const uint16_t viewportHeight, std::vector<std::unique_ptr<Page>>& pagesOut) {
+  pagesOut.clear();
   if (ESP.getFreeHeap() < MIN_STYLED_FREE_HEAP || ESP.getMaxAllocHeap() < MIN_STYLED_MAX_ALLOC) {
     LOG_ERR("DHTML", "Low heap for styled definition (%u free, %u max block)", ESP.getFreeHeap(),
             ESP.getMaxAllocHeap());
     return false;
   }
 
+  bool normalized = false;
   {
     HalFile tmp = Storage.open(TMP_HTML_PATH, O_WRITE | O_CREAT | O_TRUNC);
     if (!tmp) {
       LOG_ERR("DHTML", "Cannot create %s", TMP_HTML_PATH);
       return false;
     }
-    if (!writeNormalizedXhtml(definition, tmp)) {
-      LOG_ERR("DHTML", "Short write to %s", TMP_HTML_PATH);
-      return false;
-    }
+    normalized = writeNormalizedXhtml(definition, tmp);
+    if (normalized) normalized = tmp.close();
   }  // destructor closes the file before the parser reopens the same path
-
-  pagesOut.clear();
+  if (!normalized) {
+    LOG_ERR("DHTML", "Cannot finish normalized definition at %s", TMP_HTML_PATH);
+    Storage.remove(TMP_HTML_PATH);
+    return false;
+  }
   // One fixed allocation (256 bytes on C3); pages must outlive the parser.
   pagesOut.reserve(MAX_STYLED_PAGES);
 
@@ -286,6 +289,8 @@ bool buildDictionaryHtmlPages(GfxRenderer& renderer, const std::string& definiti
     LOG_ERR("DHTML", "Styled definition exceeded page heap budget");
   }
   if (!ok || resourceLimitHit || pagesOut.empty()) {
+    if (!ok && !resourceLimitHit) LOG_ERR("DHTML", "Definition parse/layout failed");
+    if (ok && !resourceLimitHit && pagesOut.empty()) LOG_ERR("DHTML", "Definition produced no styled pages");
     pagesOut.clear();
     return false;
   }

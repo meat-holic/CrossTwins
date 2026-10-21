@@ -10,7 +10,7 @@ import subprocess
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
-sdk = (ROOT / "freeink-sdk/libs/network/BleKeyboardHost/src/BleKeyboardHost.cpp").read_text(encoding="utf-8")
+sdk = (Path(os.environ.get("BLETURNER_SDK_ROOT", ROOT / "freeink-sdk")) / "libs/network/BleKeyboardHost/src/BleKeyboardHost.cpp").read_text(encoding="utf-8")
 adapter = (ROOT / "lib/BlePageTurner/src/SdkRadio.cpp").read_text(encoding="utf-8")
 
 
@@ -28,6 +28,7 @@ harness = r"""
 #include <cassert>
 #include <cstdint>
 #include <cstring>
+struct Config { char peerAddr[18]; };
 #include <iostream>
 #include <string>
 #include <vector>
@@ -64,6 +65,10 @@ struct BleKeyboardHost {
     return true;
   }
   bool connect(const char* addr) { return connectInternal(addr, true); }
+  bool isConnected() const { return connected_; }
+  const char* connectedAddr() const { return connAddr_; }
+  uint8_t pairedCount() const { return bondCount_; }
+  const Bond& paired(uint8_t i) const { return bonds_[i]; }
   void poll();
   bool armSelectedPeerReconnect(const char* addr);
   void disconnect();
@@ -119,8 +124,8 @@ int main() {
   reset(2);
   assert(!armBondedReconnect(0, nullptr));
   assert(!armBondedReconnect(0, ""));
-  assert(!armBondedReconnect(0, addresses[3])); // unknown choice: unchanged SDK fallback
-  radio.poll(); assert(radio.attempts.back() == addresses[0]);
+  assert(!armBondedReconnect(0, addresses[3]));
+  radio.poll(); assert(radio.attempts.empty()); // invalid choice never falls back
   reset(2);
   assert(!armBondedReconnect(1, nullptr));
   scan.active = true; radio.poll(); assert(radio.attempts.empty());

@@ -22,15 +22,41 @@ function browser(configured = true) {
                   { key: 'unrelated', type: 'toggle', value: 0 }],
     originalValues: { koPassword: null, unrelated: 0 },
     document: { getElementById: id => controls[id] },
-    handleSettingChanged() {}, showMessage() {}, posted: null, reloads: 0,
+    handleSettingChanged() {}, showMessage() {}, showWebToast() {}, posted: null, reloads: 0,
   };
   state.fetch = async (_, request) => { state.posted = JSON.parse(request.body); return { ok: true }; };
   state.loadSettings = async () => { state.reloads++; };
   const context = vm.createContext(state);
   for (const name of ['escapeHtml', 'renderControl', 'getValue', 'markChanged', 'findSetting', 'getControl',
-                      'clearPassword', 'saveSettings']) vm.runInContext(productionFunction(name), context);
+                      'clearPassword', 'getControlValue', 'saveSettings']) vm.runInContext(productionFunction(name), context);
   return { state, controls };
 }
+
+function serverBrowser(confirm) {
+  const fixture=browser(); const {state,controls}=fixture;
+  state.allSettings.push({key:'koServerUrl',name:'서버 URL',type:'string',value:'https://old.invalid'},
+                         {key:'koServerType',name:'서버 종류',type:'enum',value:0,options:['CrossPoint','KOSync','Other']});
+  Object.assign(state.originalValues,{koServerUrl:'https://old.invalid',koServerType:0});
+  controls['setting-koServerUrl']={value:'https://new.invalid',dataset:{}};
+  controls['setting-koServerType']={value:'0',dataset:{}};
+  state.confirmations=[];
+  state.window={confirm:message=>{state.confirmations.push(message);return confirm;}};
+  return fixture;
+}
+test('URL change confirms and posts the selected existing profile without inference',async()=>{
+  const {state}=serverBrowser(true);await state.saveSettings();
+  assert.equal(state.posted.koServerUrl,'https://new.invalid');
+  assert.equal(state.posted.koServerType,0);
+  assert.equal(state.confirmations.length,1);
+  assert.ok(state.confirmations[0].includes('CrossPoint'));
+});
+test('profile choice and URL are sent together; cancel posts neither',async()=>{
+  const {state,controls}=serverBrowser(true);controls['setting-koServerType'].value='1';await state.saveSettings();
+  assert.equal(state.posted.koServerType,1);assert.equal(state.posted.koServerUrl,'https://new.invalid');
+  const cancelled=serverBrowser(false);await cancelled.state.saveSettings();
+  assert.equal(cancelled.state.posted,null);assert.equal(cancelled.state.originalValues.koServerUrl,'https://old.invalid');
+  assert.equal(cancelled.controls.saveBtn.disabled,false);
+});
 test('configured secret is never reflected into HTML, even if a value is accidentally supplied', () => {
   const { state } = browser();
   const field = { ...state.allSettings[0], value: 'must-not-reflect' };

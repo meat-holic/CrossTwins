@@ -1,0 +1,120 @@
+#include <gtest/gtest.h>
+#include <algorithm>
+#include <cctype>
+#include <cstring>
+#include <memory>
+#include <string>
+#include <string_view>
+#include <vector>
+#include "src/activities/reader/ReaderMenuCapabilities.h"
+#define LOG_ERR(...) ((void)0)
+
+namespace FsHelpers {
+@EXTENSIONS@
+}
+struct GfxRenderer {};
+struct MappedInputManager {};
+bool failAllocation = false;
+template <typename T, typename... Args>
+std::unique_ptr<T> makeUniqueNoThrow(Args&&... args) {
+  return failAllocation ? nullptr : std::make_unique<T>(std::forward<Args>(args)...);
+}
+class ReaderActivity {
+ public:
+  std::string path, kind;
+  bool fast;
+  ReaderActivity(std::string path, std::string kind, bool fast) : path(std::move(path)), kind(kind), fast(fast) {}
+  virtual ~ReaderActivity() = default;
+  static std::unique_ptr<ReaderActivity> create(GfxRenderer&, MappedInputManager&, std::string, bool);
+};
+#define READER_TYPE(T, kind) struct T : ReaderActivity { T(GfxRenderer&, MappedInputManager&, std::string path, bool fast) : ReaderActivity(std::move(path), kind, fast) {} };
+READER_TYPE(TxtReaderActivity, "TXT")
+READER_TYPE(XtcReaderActivity, "XTC")
+READER_TYPE(EpubReaderActivity, "EPUB")
+@READER_FACTORY@
+
+enum class StrId {
+  STR_SELECT_CHAPTER, STR_FOOTNOTES, STR_BOOKMARKS, STR_TOGGLE_BOOKMARK, STR_NIGHT_MODE,
+  STR_FRONTLIGHT, STR_BT_PAGE_TURNER, STR_LOOKUP, STR_ORIENTATION, STR_AUTO_TURN_PAGES_PER_MIN,
+  STR_GO_TO_PERCENT, STR_SCREENSHOT_BUTTON, STR_DISPLAY_QR, STR_GO_HOME_BUTTON, STR_SYNC_PROGRESS,
+  STR_DELETE_CACHE, STR_TEXT_SETTINGS
+};
+struct { bool available = true; bool present() const { return available; } } Frontlight;
+struct {
+  struct { int enabled = 0; int pick = 1; std::string selected = "selected"; } ble;
+  int saves = 0;
+  void saveToFile() { ++saves; }
+} SETTINGS;
+namespace bleturner {
+bool compiled = true;
+int connects = 0, stops = 0;
+struct State { bool compiledIn; };
+State status() { return {compiled}; }
+void switchOff() { ++stops; }
+void requestConnect() { ++connects; }
+}
+class EpubReaderMenuActivity {
+ public:
+  using MenuAction = readermenu::Action;
+  struct MenuItem { MenuAction action; StrId labelId; };
+  static constexpr size_t MAX_MENU_ITEMS = 17;
+  static void buildMenuItems(std::vector<MenuItem>&, bool, bool, readermenu::Profile);
+  static void toggleBluetooth();
+};
+@MENU_ITEMS@
+@TOGGLE_BLE@
+
+TEST(ReaderRoute, TxtAndMarkdownKeepOnDemandReaderAndSourcePath) {
+  GfxRenderer renderer; MappedInputManager input;
+  for (const auto* path : {"/books/a.txt", "/books/b.TXT", "/books/c.md", "/books/d.MD"}) {
+    auto reader = ReaderActivity::create(renderer, input, path, true);
+    ASSERT_NE(reader, nullptr);
+    EXPECT_EQ(reader->kind, "TXT");
+    EXPECT_EQ(reader->path, path);
+    EXPECT_TRUE(reader->fast);
+  }
+}
+TEST(ReaderRoute, EpubAndXtcRemainDistinctAndAllocationFailureIsRecoverable) {
+  GfxRenderer renderer; MappedInputManager input;
+  EXPECT_EQ(ReaderActivity::create(renderer, input, "a.epub", false)->kind, "EPUB");
+  EXPECT_EQ(ReaderActivity::create(renderer, input, "a.xtch", false)->kind, "XTC");
+  failAllocation = true;
+  EXPECT_EQ(ReaderActivity::create(renderer, input, "a.txt", false), nullptr);
+  failAllocation = false;
+  EXPECT_EQ(ReaderActivity::create(renderer, input, "a.txt", false)->kind, "TXT");
+}
+TEST(ReaderMenu, TxtHasOnlyItsSixApprovedActionsEvenWhenAllCapabilitiesExist) {
+  std::vector<EpubReaderMenuActivity::MenuItem> items;
+  EpubReaderMenuActivity::buildMenuItems(items, true, true, readermenu::Profile::Txt);
+  ASSERT_EQ(items.size(), 6u);
+  for (const auto& item : items) EXPECT_TRUE(readermenu::supportsAction(readermenu::Profile::Txt, item.action));
+}
+TEST(ReaderMenu, EpubCapacityAndBleCapabilityStayConsistent) {
+  std::vector<EpubReaderMenuActivity::MenuItem> items;
+  Frontlight.available = true; bleturner::compiled = true;
+  EpubReaderMenuActivity::buildMenuItems(items, true, true, readermenu::Profile::Epub);
+  EXPECT_EQ(items.size(), EpubReaderMenuActivity::MAX_MENU_ITEMS);
+  Frontlight.available = false; bleturner::compiled = false;
+  EpubReaderMenuActivity::buildMenuItems(items, false, false, readermenu::Profile::Epub);
+  EXPECT_EQ(items.size(), 13u);
+  for (const auto& item : items) {
+    EXPECT_NE(item.action, readermenu::Action::BLUETOOTH);
+    EXPECT_NE(item.action, readermenu::Action::FRONTLIGHT);
+  }
+  Frontlight.available = true; bleturner::compiled = true;
+}
+TEST(ReaderMenu, ToggleKeepsSelectedOnlyAndFirstBondPolicyWhileUsingRuntimeLifecycle) {
+  for (int pick : {0, 1}) {
+    SETTINGS = {}; SETTINGS.ble.pick = pick;
+    bleturner::connects = bleturner::stops = 0;
+    EpubReaderMenuActivity::toggleBluetooth();
+    EXPECT_EQ(bleturner::connects, 1);
+    EXPECT_EQ(bleturner::stops, 0);
+    EXPECT_EQ(SETTINGS.ble.pick, pick);
+    EXPECT_EQ(SETTINGS.ble.selected, "selected");
+    EpubReaderMenuActivity::toggleBluetooth();
+    EXPECT_EQ(bleturner::connects, 1);
+    EXPECT_EQ(bleturner::stops, 1);
+    EXPECT_EQ(SETTINGS.saves, 2);
+  }
+}

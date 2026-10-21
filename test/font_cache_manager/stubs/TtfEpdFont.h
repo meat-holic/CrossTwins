@@ -1,9 +1,26 @@
 #pragma once
-
-// Host-test stub. The real header self-gates on VectorFontSupport.h's
-// CROSSPOINT_VECTOR_FONTS (PSRAM boards only); host tests build with the
-// gate off, so FontCacheManager.cpp compiles none of its TTF dispatch and
-// only needs the macro and the forward-declared pointer type.
+#ifndef CROSSPOINT_VECTOR_FONTS
 #define CROSSPOINT_VECTOR_FONTS 0
-
+#endif
+#if CROSSPOINT_VECTOR_FONTS
+#include <cstdio>
+class TtfEpdFont {
+ public:
+  int clearCalls = 0, releaseCalls = 0, buildCalls = 0, addCalls = 0;
+  char lastText[32]{};
+  void clearCache() { ++clearCalls; }
+  void releaseResidentCaches() { ++releaseCalls; }
+  bool build(const char* s) {
+    ++buildCalls;
+    std::snprintf(lastText, sizeof(lastText), "%s", s);
+    return true;
+  }
+  bool addCoverage(const char* s) {
+    ++addCalls;
+    std::snprintf(lastText, sizeof(lastText), "%s", s);
+    return true;
+  }
+};
+#else
 class TtfEpdFont;
+#endif

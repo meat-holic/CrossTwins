@@ -1,0 +1,9 @@
+{
+  "name": "Epub",
+  "version": "0.0.0",
+  "build": {
+    "srcDir": ".",
+    "includeDir": ".",
+    "srcFilter": ["+<*>", "-<ContentProtection.cpp>", "-<Epub/converters/GifToFramebufferConverter.cpp>"]
+  }
+}

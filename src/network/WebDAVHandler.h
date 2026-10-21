@@ -5,6 +5,7 @@
 
 class WebDAVHandler : public RequestHandler {
  public:
+  ~WebDAVHandler() override;
   // RequestHandler interface
   bool canHandle(WebServer& server, HTTPMethod method, const String& uri) override;
   bool canRaw(WebServer& server, const String& uri) override;
@@ -17,6 +18,8 @@ class WebDAVHandler : public RequestHandler {
   String _putPath;
   bool _putOk = false;
   bool _putExisted = false;
+  bool _putTempOwned = false;
+  size_t _putReceived = 0;
 
   // WebDAV method handlers
   void handleOptions(WebServer& s);

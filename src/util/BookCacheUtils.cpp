@@ -25,10 +25,16 @@ void clearBookCache(const std::string& path) {
     Epub(path, "/.crosspoint").clearCache();
   } else if (FsHelpers::hasXtcExtension(path)) {
     Xtc(path, "/.crosspoint").clearCache();
-  } else if (FsHelpers::hasTxtExtension(path)) {
+  } else if (FsHelpers::hasTxtExtension(path) || FsHelpers::hasMarkdownExtension(path)) {
     Txt(path, "/.crosspoint").clearCache();
   } else {
     return;
   }
   LOG_DBG("BookCache", "Done checking metadata cache for: %s", path.c_str());
+}
+
+bool removeBookFile(const std::string& path) {
+  if (!Storage.remove(path.c_str())) return false;
+  clearBookCache(path);
+  return true;
 }

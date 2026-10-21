@@ -865,6 +865,7 @@ CrossPointPosition ProgressMapper::toCrossPoint(const std::shared_ptr<Epub>& epu
                                                 GfxRenderer& renderer, int currentSpineIndex,
                                                 int totalPagesInCurrentSpine, int fallbackTotalPages) {
   CrossPointPosition result{};
+  result.spineIndex = -1;
   const size_t bookSize = epub->getBookSize();
   if (bookSize == 0) return result;
 
@@ -887,23 +888,26 @@ CrossPointPosition ProgressMapper::toCrossPoint(const std::shared_ptr<Epub>& epu
   if (xpathSpine >= 0 && xpathSpine < spineCount) {
     result.spineIndex = xpathSpine;
     result.hasResolvedSpineIndex = true;
-  } else {
-    for (int i = 0; i < spineCount; i++) {
-      if (epub->getCumulativeSpineItemSize(i) >= targetBytes) {
-        result.spineIndex = i;
-        break;
-      }
-    }
+  } else if (const int found = epub->getSpineIndexForSize(targetBytes); found >= 0) {
+    result.spineIndex = found;
   }
 
-  const size_t prevCum = (result.spineIndex > 0) ? epub->getCumulativeSpineItemSize(result.spineIndex - 1) : 0;
-  const size_t spineSize = epub->getCumulativeSpineItemSize(result.spineIndex) - prevCum;
+  size_t prevCum = 0, cumulative = 0;
+  if (result.spineIndex < 0 || !epub->tryGetSpineBounds(result.spineIndex, prevCum, cumulative)) {
+    result.spineIndex = -1;
+    return result;
+  }
+  const size_t spineSize = cumulative - prevCum;
 
   if (result.spineIndex == currentSpineIndex && totalPagesInCurrentSpine > 0) {
     result.totalPages = totalPagesInCurrentSpine;
   } else if (currentSpineIndex >= 0 && currentSpineIndex < spineCount && totalPagesInCurrentSpine > 0) {
-    const size_t pc = (currentSpineIndex > 0) ? epub->getCumulativeSpineItemSize(currentSpineIndex - 1) : 0;
-    const size_t cs = epub->getCumulativeSpineItemSize(currentSpineIndex) - pc;
+    size_t pc = 0, currentEnd = 0;
+    if (!epub->tryGetSpineBounds(currentSpineIndex, pc, currentEnd)) {
+      result.spineIndex = -1;
+      return result;
+    }
+    const size_t cs = currentEnd - pc;
     if (cs > 0)
       result.totalPages = std::max(
           1, static_cast<int>(totalPagesInCurrentSpine * static_cast<float>(spineSize) / static_cast<float>(cs)));

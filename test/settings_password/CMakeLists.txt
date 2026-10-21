@@ -10,14 +10,22 @@ if(NOT SETTINGS_JSON_INCLUDE)
 endif()
 production_slice(SETTING_INFO src/activities/settings/SettingsActivity.h
   "enum class SettingType" "class SettingsActivity final")
-production_slice(KO_METADATA src/SettingsList.h
-  "        // --- KOReader Sync" "        SettingInfo::DynamicString(\n            StrId::STR_SYNC_SERVER_URL")
+file(READ "${REPO_ROOT}/src/SettingsList.cpp" metadata)
+string(FIND "${metadata}" "// --- KOReader Sync" first)
+string(FIND "${metadata}" "StrId::STR_SYNC_SERVER_URL" last)
+string(SUBSTRING "${metadata}" 0 ${last} before_server)
+string(FIND "${before_server}" "emit(" last REVERSE)
+math(EXPR length "${last} - ${first}")
+string(SUBSTRING "${metadata}" ${first} ${length} KO_METADATA)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${REPO_ROOT}/src/SettingsList.cpp")
 production_slice(GET_SETTINGS src/network/CrossPointWebServer.cpp
   "void CrossPointWebServer::handleGetSettings()" "void CrossPointWebServer::handlePostSettings()")
 production_slice(POST_SETTINGS src/network/CrossPointWebServer.cpp
   "void CrossPointWebServer::handlePostSettings()" "// ---- OPDS Server API ----")
 production_slice(AUTH_HEADERS lib/KOReaderSync/KOReaderSyncClient.cpp
-  "void applyAuthHeaders(" "// True when free heap")
+  "void applyAuthHeaders(" "// Caller-configured headers")
+production_slice(VALIDATE_SERVER lib/KOReaderSync/KOReaderCredentialStore.cpp
+  "bool KOReaderCredentialStore::isValidServerConfiguration(" "bool KOReaderCredentialStore::saveServerConfiguration(")
 configure_file(SettingsPasswordTest.cpp.in SettingsPasswordTest.cpp @ONLY)
 add_executable(SettingsPasswordTest "${CMAKE_CURRENT_BINARY_DIR}/SettingsPasswordTest.cpp")
 target_include_directories(SettingsPasswordTest PRIVATE "${SETTINGS_JSON_INCLUDE}")

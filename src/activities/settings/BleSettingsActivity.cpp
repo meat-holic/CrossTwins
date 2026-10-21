@@ -38,6 +38,13 @@ void BleSettingsActivity::onEnter() {
   requestUpdate();
 }
 
+bool BleSettingsActivity::consumeConnectFailure() {
+  char failure[48];
+  if (!bleturner::takeConnectFailure(failure, sizeof(failure))) return false;
+  LOG_ERR("BLE", "%s", failure);
+  return true;
+}
+
 void BleSettingsActivity::loop() {
   // Holding Confirm on an action clears it (touch: a long press on the row, onRowLongPress).
   if (view == View::Mapping && mappedInput.wasLongPressed(MappedInputManager::Button::Confirm, CLEAR_HOLD_MS)) {
@@ -49,8 +56,10 @@ void BleSettingsActivity::loop() {
   // A remote being paired that links becomes the chosen one: save it.
   if (SETTINGS.ble.enabled && bleturner::service()) SETTINGS.saveToFile();
   if (learnAction != bleturner::Action::None) stepLearning();
-  if (signature() == shownSignature) return;  // an e-ink repaint only when something changed
-  refresh();
+  // A failure may arrive after its link flags changed: it need not change the signature.
+  const bool connectionFailed = consumeConnectFailure();
+  if (!connectionFailed && signature() == shownSignature) return;
+  refresh(connectionFailed);
   requestUpdate();
 }
 
@@ -103,15 +112,13 @@ uint32_t BleSettingsActivity::signature() const {
          static_cast<uint32_t>(bleturner::bondCount()) << 8 | static_cast<uint32_t>(bleturner::foundCount()) << 16;
 }
 
-void BleSettingsActivity::refresh() {
+void BleSettingsActivity::refresh(const bool connectionFailed) {
   RenderLock lock(*this);
   shownSignature = signature();
   const auto st = bleturner::status();
-  char failure[48];
   if (!SETTINGS.ble.enabled || st.stopping) {
     snprintf(status, sizeof(status), "%s", tr(STR_STATE_OFF));
-  } else if (bleturner::takeConnectFailure(failure, sizeof(failure))) {
-    LOG_ERR("BLE", "%s", failure);
+  } else if (connectionFailed || consumeConnectFailure()) {
     snprintf(status, sizeof(status), "%s", tr(STR_BT_FAILED));
   } else if (!st.running && st.starting) {
     snprintf(status, sizeof(status), "%s", tr(STR_BT_STARTING));

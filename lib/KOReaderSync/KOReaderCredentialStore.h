@@ -1,9 +1,12 @@
 #pragma once
 #include <ArduinoJson.h>
+#include <HttpHeader.h>
 #include <PersistableStore.h>
 
+#include <array>
 #include <cstdint>
 #include <string>
+#include <string_view>
 
 // Document matching method for KOReader sync
 enum class DocumentMatchMethod : uint8_t {
@@ -11,10 +14,22 @@ enum class DocumentMatchMethod : uint8_t {
   BINARY = 1,    // Match by partial MD5 of file content (more accurate, but files must be identical)
 };
 
+// Namespace-scope (not a class member) so it's usable as the std::array size
+// in KOReaderCredentialStore's own member declaration, which needs it before
+// the class's public section would otherwise declare it.
+constexpr size_t KOREADER_MAX_CUSTOM_HEADERS = 2;
+
 // How manual "Sync Progress" resolves differences after fetching remote progress.
 enum class KOReaderSyncBehavior : uint8_t {
   ASK_EVERY_TIME = 0,  // Preserve legacy behavior: always show Apply/Upload choices.
   SMART = 1,           // Auto-resolve simple cases using furthest progress.
+};
+
+// Protocol family/capability profile selected for the configured sync server.
+enum class KOReaderServerType : uint8_t {
+  CROSSPOINT = 0,  // CrossPoint protocol extensions, including rich position.
+  KOSYNC = 1,      // Strict standard KOSync payloads.
+  OTHER = 2,       // Compatible custom servers that accept CrossPoint-style extensions.
 };
 
 /**
@@ -30,8 +45,14 @@ class KOReaderCredentialStore : public PersistableStore<KOReaderCredentialStore>
   std::string password;
   std::string serverUrl;                                            // Custom sync server URL (empty = default)
   DocumentMatchMethod matchMethod = DocumentMatchMethod::FILENAME;  // Default to filename for compatibility
-  bool sendMetadata = false;                                        // Send document metadata with progress sync
+  bool sendMetadata = false;                                        // Send document metadata only after opt-in
+  bool syncClippings = false;                                       // Opt-in crosspoint-sync extension
   KOReaderSyncBehavior syncBehavior = KOReaderSyncBehavior::SMART;
+  KOReaderServerType serverType = KOReaderServerType::CROSSPOINT;
+
+  // Fixed-size to avoid vector growth on the settings edit path; an empty
+  // name marks an unused slot.
+  std::array<HttpHeader, KOREADER_MAX_CUSTOM_HEADERS> customHeaders;
 
   // Private constructor for singleton
   KOReaderCredentialStore() = default;
@@ -40,6 +61,8 @@ class KOReaderCredentialStore : public PersistableStore<KOReaderCredentialStore>
   friend class PersistableStore<KOReaderCredentialStore>;
 
  public:
+  static constexpr size_t MAX_CUSTOM_HEADERS = KOREADER_MAX_CUSTOM_HEADERS;
+
   static const char* getFilePath() { return "/.crosspoint/koreader.json"; }
   void toJson(JsonDocument& doc) const;
   bool fromJson(JsonVariantConst doc);
@@ -61,12 +84,18 @@ class KOReaderCredentialStore : public PersistableStore<KOReaderCredentialStore>
   // Server URL management
   void setServerUrl(const std::string& url);
   const std::string& getServerUrl() const { return serverUrl; }
+  static bool isValidServerConfiguration(std::string_view url, KOReaderServerType type);
+  // Explicit user confirmation saves the URL/profile pair; migration setters above stay unchanged.
+  bool saveServerConfiguration(std::string url, KOReaderServerType type);
 
   // Get base URL for API calls (with http:// normalization if no protocol, falls back to default)
   std::string getBaseUrl() const;
 
-  // Whether API calls target the CrossPoint sync server that supports protocol extensions.
-  bool usesCrossPointSyncServer() const;
+  // Server protocol/capability profile.
+  void setServerType(KOReaderServerType type);
+  KOReaderServerType getServerType() const { return serverType; }
+  bool supportsRichProgress() const { return serverType != KOReaderServerType::KOSYNC; }
+  bool supportsExtendedMetadata() const { return serverType == KOReaderServerType::OTHER; }
 
   // Document matching method
   void setMatchMethod(DocumentMatchMethod method);
@@ -76,9 +105,16 @@ class KOReaderCredentialStore : public PersistableStore<KOReaderCredentialStore>
   void setSendMetadata(bool enabled);
   bool getSendMetadata() const { return sendMetadata; }
 
+  void setSyncClippings(bool enabled) { syncClippings = enabled; }
+  bool getSyncClippings() const { return syncClippings; }
+
   // Sync behavior
   void setSyncBehavior(KOReaderSyncBehavior behavior);
   KOReaderSyncBehavior getSyncBehavior() const { return syncBehavior; }
+
+  // Custom headers sent with every sync request (index must be < MAX_CUSTOM_HEADERS)
+  void setCustomHeader(size_t index, const std::string& name, const std::string& value);
+  const std::array<HttpHeader, MAX_CUSTOM_HEADERS>& getCustomHeaders() const { return customHeaders; }
 };
 
 // Helper macro to access credential store

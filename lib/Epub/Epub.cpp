@@ -1045,7 +1045,20 @@ int Epub::getSpineIndexForTextReference() const {
   return 0;
 }
 
-// Calculate progress in book (returns 0.0-1.0)
+int Epub::getSpineIndexForSize(const size_t bytes) const {
+  if (!bookMetadataCache || !bookMetadataCache->isLoaded() || static_cast<uint64_t>(bytes) > UINT32_MAX) return -1;
+  return bookMetadataCache->getSpineIndexForSize(static_cast<uint32_t>(bytes));
+}
+
+bool Epub::tryGetSpineBounds(const int index, size_t& start, size_t& end) const {
+  uint32_t previous = 0, current = 0;
+  if (!bookMetadataCache || !bookMetadataCache->tryGetSpineBounds(index, previous, current)) return false;
+  start = previous;
+  end = current;
+  return true;
+}
+
+// Calculate progress in book (returns 0.0-1.0).
 float Epub::calculateProgress(const int currentSpineIndex, const float currentSpineRead) const {
   const size_t bookSize = getBookSize();
   if (bookSize == 0) {

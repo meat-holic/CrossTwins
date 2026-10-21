@@ -74,3 +74,10 @@ CrossTwins의 기반이 되는 오픈소스 펌웨어 프로젝트입니다. 원
 CrossTwins의 한국어 사용자 경험과 설계 방향에 큰 영향을 준 프로젝트입니다. KO 포크에서 선보인 여러 아이디어와 UX를 참고했습니다.
 
 CrossPoint와 CrossPoint-KO의 개발자 및 기여자분들께 감사드립니다.
+
+
+## 2.0.0rc 통합 실험 범위
+
+`experiment/upstream-2.0.0rc`는 CrossTwins CT.7 중심의 통합 후보이며 정식 릴리스가 아닙니다. 공식 빌드 대상은 X3/X4, Sticky, X4 Pro, X4 Classic, Paper Mono의 기존 다섯 환경입니다. 한국어/영어, CT EPUB 렌더러와 캐시, SD cpfont4/Pretendard, TXT 온디맨드 byte-offset 복원 및 기존 BLE 정책을 보존합니다.
+
+SDK 실험 pin은 `7f0f20202baf26cad5fd32862b6fc1387467a741`입니다. LCP, plugin, clipping, GIF, TXT→HTML 및 추가 보드는 통합 대상이 아닙니다. 빌드 성공과 독립 리뷰·실기기 안정성·릴리스 승인은 별도입니다. 상세 빌드/검증 명령과 결과는 Slice 10A 보고서를 따릅니다.

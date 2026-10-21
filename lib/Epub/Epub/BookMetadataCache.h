@@ -58,6 +58,8 @@ class BookMetadataCache {
   bool buildMode;
 
   HalFile bookFile;
+  // Separate cursor for the sparse window; opened once with checked allocation.
+  mutable HalFile sizeFile;
   // Temp file handles during build
   HalFile spineFile;
   HalFile tocFile;
@@ -67,10 +69,14 @@ class BookMetadataCache {
   // wrapper serves whichever pass is active (spine, then toc).
   std::unique_ptr<serialization::BufferedFileWriter> passOut;
 
-  // Cumulative spine sizes, cached in RAM at load() so progress/percent lookups are
-  // O(1) instead of 2 seeks + a heap-allocating SpineEntry read per access (4 bytes
-  // per spine item; <1KB for typical books).
-  std::vector<uint32_t> cumulativeSizes;
+  // Cumulative spine sizes stay in book.bin; RAM holds every SIZE_WINDOW-th one and one window.
+  static constexpr int SIZE_WINDOW = 32;
+  std::unique_ptr<uint32_t[]> windowStarts;  // total before item w * SIZE_WINDOW
+  uint16_t windowCount = 0;
+  uint32_t bookSize = 0;
+  mutable int windowFirst = -1;
+  mutable uint32_t window[SIZE_WINDOW] = {};
+  bool fillWindow(int first) const;  // caller holds sizeWindowLock
 
   // Index for fast href→spineIndex lookup (used only for large EPUBs)
   struct SpineHrefIndexEntry {
@@ -127,8 +133,11 @@ class BookMetadataCache {
   SpineEntry getSpineEntry(int index);
   TocEntry getTocEntry(int index);
   // Cumulative byte size up to and including the given spine item (0 if out of range
-  // or not loaded). Backed by the in-RAM cumulativeSizes cache populated in load().
+  // or not loaded). Backed by the sparse size window.
   uint32_t getCumulativeSize(int index) const;
+  bool tryGetCumulativeSize(int index, uint32_t& size) const;
+  bool tryGetSpineBounds(int index, uint32_t& start, uint32_t& end) const;
+  int getSpineIndexForSize(uint32_t size) const;
   int getSpineCount() const { return spineCount; }
   int getTocCount() const { return tocCount; }
   bool isLoaded() const { return loaded; }

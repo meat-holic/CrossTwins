@@ -24,6 +24,26 @@ constexpr char CUSTOM_SLEEP_ROOT_BMP[] = "/sleep.bmp";
 constexpr char TRANSPARENT_SLEEP_ROOT_BMP[] = "/sleep-overlay.bmp";
 constexpr char TRANSPARENT_SLEEP_ROOT_PNG[] = "/sleep-overlay.png";
 constexpr size_t COPY_BUFFER_SIZE = 2048;
+
+// FAT cannot replace an existing file with rename. Preserve the old cover until
+// promotion succeeds; a failed rollback leaves the backup available for recovery.
+bool promoteSleepCover(const std::string& temporary, const char* destination) {
+  const std::string backup = std::string(destination) + ".bak";
+  if (Storage.exists(backup.c_str())) {
+    LOG_ERR("BMP", "Sleep cover backup needs recovery: %s", backup.c_str());
+    return false;
+  }
+  const bool hadCover = Storage.exists(destination);
+  if (hadCover && !Storage.rename(destination, backup.c_str())) return false;
+  if (!Storage.rename(temporary.c_str(), destination)) {
+    if (hadCover && !Storage.rename(backup.c_str(), destination)) {
+      LOG_ERR("BMP", "Cannot restore sleep cover; retained %s", backup.c_str());
+    }
+    return false;
+  }
+  if (hadCover && !Storage.remove(backup.c_str())) LOG_ERR("BMP", "Cannot remove old sleep cover backup");
+  return true;
+}
 }  // namespace
 
 BmpViewerActivity::BmpViewerActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::string path)
@@ -305,7 +325,8 @@ void BmpViewerActivity::doSetSleepCover() {
       LOG_ERR("BMP", "OOM: sleep cover copy buffer");
     } else {
       HalFile inFile, outFile;
-      if (Storage.openFileForRead("BMP", filePath, inFile) && Storage.openFileForWrite("BMP", destination, outFile)) {
+      const std::string temporary = std::string(destination) + ".tmp";
+      if (Storage.openFileForRead("BMP", filePath, inFile) && Storage.openFileForWrite("BMP", temporary, outFile)) {
         int bytesRead;
         success = true;
         while ((bytesRead = inFile.read(buffer.get(), COPY_BUFFER_SIZE)) > 0) {
@@ -315,7 +336,14 @@ void BmpViewerActivity::doSetSleepCover() {
           }
         }
         if (bytesRead < 0) success = false;
-        outFile.close();
+        inFile.close();
+        success = outFile.close() && success;
+        if (success) success = promoteSleepCover(temporary, destination);
+      }
+      if (!success) {
+        if (inFile) inFile.close();
+        if (outFile) outFile.close();
+        Storage.remove(temporary.c_str());
       }
     }
   }

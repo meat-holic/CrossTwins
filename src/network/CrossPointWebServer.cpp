@@ -5,8 +5,10 @@
 #include <FsHelpers.h>
 #include <HalGPIO.h>
 #include <HalStorage.h>
+#include <I18n.h>
 #include <LibraryBuilder.h>
 #include <Logging.h>
+#include <Memory.h>
 #include <WiFi.h>
 #include <esp_efuse.h>
 #include <esp_efuse_table.h>
@@ -16,6 +18,7 @@
 
 #include "CrossPointSettings.h"
 #include "FontInstaller.h"
+#include "NetworkFileCommit.h"
 #include "OpdsServerStore.h"
 #include "ProtectedPaths.h"
 #include "SdCardFontSystem.h"
@@ -26,6 +29,9 @@
 #include "html/FontsPageHtml.generated.h"
 #include "html/HomePageHtml.generated.h"
 #include "html/SettingsPageHtml.generated.h"
+#include "html/assets/crosspoint_iconSvg.generated.h"
+#include "html/assets/iconsSvg.generated.h"
+#include "html/assets/webCss.generated.h"
 #include "html/js/jszip_minJs.generated.h"
 #include "util/BookCacheUtils.h"
 #include "util/TaskWatchdog.h"
@@ -62,6 +68,7 @@ size_t wsLastCompleteSize = 0;
 unsigned long wsLastCompleteAt = 0;
 
 String normalizeWebPath(const String& inputPath) {
+  if (inputPath.isEmpty() || !inputPath.startsWith("/")) return "";
   std::string normalized;
   if (!protectedpaths::normalizePath(std::string_view(inputPath.c_str(), inputPath.length()), normalized)) return "";
   return normalized.c_str();
@@ -85,6 +92,9 @@ bool isProtectedItemName(const String& name) {
 // - HomePageHtml (from html/HomePage.html)
 // - FilesPageHeaderHtml (from html/FilesPageHeader.html)
 // - FilesPageFooterHtml (from html/FilesPageFooter.html)
+static void sendStaticContent(WebServer* server, const char* data, size_t len, const char* etag,
+                              const char* contentType);
+
 CrossPointWebServer::CrossPointWebServer() {}
 
 CrossPointWebServer::~CrossPointWebServer() { stop(); }
@@ -141,6 +151,15 @@ void CrossPointWebServer::begin() {
   server->on("/", HTTP_GET, [this] { handleRoot(); });
   server->on("/files", HTTP_GET, [this] { handleFileList(); });
   server->on("/js/jszip.min.js", HTTP_GET, [this] { handleJszip(); });
+
+  server->on("/assets/web.css", HTTP_GET,
+             [this] { sendStaticContent(server.get(), webCss, sizeof(webCss), webCssETag, "text/css"); });
+  server->on("/assets/icons.svg", HTTP_GET,
+             [this] { sendStaticContent(server.get(), iconsSvg, sizeof(iconsSvg), iconsSvgETag, "image/svg+xml"); });
+  server->on("/assets/crosspoint-icon.svg", HTTP_GET, [this] {
+    sendStaticContent(server.get(), crosspoint_iconSvg, sizeof(crosspoint_iconSvg), crosspoint_iconSvgETag,
+                      "image/svg+xml");
+  });
 
   server->on("/api/status", HTTP_GET, [this] { handleStatus(); });
   server->on("/api/files", HTTP_GET, [this] { handleFileListData(); });
@@ -230,7 +249,7 @@ bool CrossPointWebServer::dropUploadIfCancelled() const {
 
 void CrossPointWebServer::abortWsUpload(const char* tag) {
   // Explicit close() required: file-scope global persists beyond function scope
-  wsUploadFile.close();
+  if (wsUploadFile) wsUploadFile.close();
   String filePath = wsUploadPath;
   if (!filePath.endsWith("/")) filePath += "/";
   filePath += wsUploadFileName;
@@ -255,6 +274,18 @@ void CrossPointWebServer::stop() {
 
   LOG_DBG("WEB", "[MEM] Free heap before stop: %d bytes", ESP.getFreeHeap());
 
+  if (upload.file) upload.file.close();
+  if (upload.ownsFile) {
+    const String path = upload.path + (upload.path.endsWith("/") ? "" : "/") + upload.fileName;
+    Storage.remove(path.c_str());
+    upload.ownsFile = false;
+  }
+  if (fontUpload.file) fontUpload.file.close();
+  if (fontUpload.ownsFile) {
+    Storage.remove((fontUpload.filePath + ".davtmp").c_str());
+    fontUpload.ownsFile = false;
+    fontUpload.valid = false;
+  }
   // Close any in-progress WebSocket upload and remove partial file
   if (wsUploadInProgress && wsUploadFile) {
     abortWsUpload("WEB");
@@ -473,7 +504,7 @@ void CrossPointWebServer::scanFiles(const char* path, const std::function<void(F
     if (!childPath.endsWith("/")) childPath += "/";
     childPath += fileName;
     // Credential siblings stay private even with hidden-file browsing enabled.
-    if (protectedpaths::isSensitivePath(std::string_view(childPath.c_str(), childPath.length()))) {
+    if (protectedpaths::isNetworkPathProtected(std::string_view(childPath.c_str(), childPath.length()))) {
       file.close();
       file = root.openNextFile();
       continue;
@@ -529,7 +560,7 @@ void CrossPointWebServer::handleFileListData() const {
     currentPath = normalizeWebPath(server->arg("path"));
   }
 
-  if (currentPath.isEmpty() || protectedpaths::isSensitivePath(currentPath.c_str())) {
+  if (currentPath.isEmpty() || protectedpaths::isNetworkPathProtected(currentPath.c_str())) {
     server->send(403, "text/plain", "Cannot access protected items");
     return;
   }
@@ -568,6 +599,43 @@ void CrossPointWebServer::handleFileListData() const {
   LOG_DBG("WEB", "Served file listing page for path: %s", currentPath.c_str());
 }
 
+void CrossPointWebServer::streamFileToClient(HalFile& file) const {
+  NetworkClient client = server->client();
+  static constexpr size_t CHUNK_SIZE = 4096;
+  // Off the stack: the web-server task also runs TLS and SD from this stack.
+  auto buffer = makeUniqueNoThrow<uint8_t[]>(CHUNK_SIZE);
+  if (!buffer) {
+    LOG_ERR("WEB", "OOM: %u byte stream buffer", (unsigned)CHUNK_SIZE);
+    return;
+  }
+
+  bool ok = true;
+  size_t remaining = file.size();
+  while (ok && remaining) {
+    const int result = file.read(buffer.get(), std::min(remaining, CHUNK_SIZE));
+    if (result <= 0 || static_cast<size_t>(result) > remaining) {
+      ok = false;
+      break;
+    }
+    remaining -= result;
+    const size_t bytesRead = static_cast<size_t>(result);
+    size_t totalWritten = 0;
+    while (totalWritten < bytesRead) {
+      resetTaskWatchdogIfSubscribed();
+      const size_t wrote = client.write(buffer.get() + totalWritten, bytesRead - totalWritten);
+      if (wrote == 0) {
+        ok = false;
+        break;
+      }
+      totalWritten += wrote;
+    }
+  }
+  if (!ok)
+    client.stop();
+  else
+    client.clear();
+}
+
 void CrossPointWebServer::handleDownload() const {
   if (!server->hasArg("path")) {
     server->send(400, "text/plain", "Missing path");
@@ -581,7 +649,7 @@ void CrossPointWebServer::handleDownload() const {
   }
 
   const String itemName = itemPath.substring(itemPath.lastIndexOf('/') + 1);
-  if (itemName.startsWith(".") || protectedpaths::isSensitivePath(itemPath.c_str())) {
+  if (itemName.startsWith(".") || protectedpaths::isNetworkPathProtected(itemPath.c_str())) {
     server->send(403, "text/plain", "Cannot access system files");
     return;
   }
@@ -623,27 +691,7 @@ void CrossPointWebServer::handleDownload() const {
   server->sendHeader("Content-Disposition", "attachment; filename=\"" + filename + "\"");
   server->send(200, contentType.c_str(), "");
 
-  NetworkClient client = server->client();
-  const size_t chunkSize = 4096;
-  uint8_t buffer[chunkSize];
-
-  bool downloadOk = true;
-  while (downloadOk && file.available()) {
-    int result = file.read(buffer, chunkSize);
-    if (result <= 0) break;
-    size_t bytesRead = static_cast<size_t>(result);
-    size_t totalWritten = 0;
-    while (totalWritten < bytesRead) {
-      resetTaskWatchdogIfSubscribed();
-      size_t wrote = client.write(buffer + totalWritten, bytesRead - totalWritten);
-      if (wrote == 0) {
-        downloadOk = false;
-        break;
-      }
-      totalWritten += wrote;
-    }
-  }
-  client.clear();
+  streamFileToClient(file);
   file.close();
 }
 
@@ -656,7 +704,7 @@ static bool flushUploadBuffer(CrossPointWebServer::UploadState& state) {
   if (state.bufferPos > 0 && state.file) {
     resetTaskWatchdogIfSubscribed();  // Reset watchdog before potentially slow SD write
     const unsigned long writeStart = millis();
-    const size_t written = state.file.write(state.buffer.data(), state.bufferPos);
+    const size_t written = state.file.write(state.buffer.get(), state.bufferPos);
     totalWriteTime += millis() - writeStart;
     writeCount++;
     resetTaskWatchdogIfSubscribed();  // Reset watchdog after SD write
@@ -689,6 +737,12 @@ void CrossPointWebServer::handleUpload(UploadState& state) const {
     // Reset watchdog - this is the critical 1% crash point
     resetTaskWatchdogIfSubscribed();
 
+    if (state.file) state.file.close();
+    if (state.ownsFile) {
+      String oldPath = state.path + (state.path.endsWith("/") ? "" : "/") + state.fileName;
+      Storage.remove(oldPath.c_str());
+    }
+    state.ownsFile = false;
     state.fileName = upload.filename;
     state.size = 0;
     state.success = false;
@@ -722,7 +776,7 @@ void CrossPointWebServer::handleUpload(UploadState& state) const {
     filePath += state.fileName;
 
     if (state.path.isEmpty() ||
-        protectedpaths::isSensitivePath(std::string_view(filePath.c_str(), filePath.length()))) {
+        protectedpaths::isNetworkPathProtected(std::string_view(filePath.c_str(), filePath.length()))) {
       state.error = "Invalid or protected path";
       return;
     }
@@ -735,6 +789,12 @@ void CrossPointWebServer::handleUpload(UploadState& state) const {
       return;
     }
 
+    if (!state.buffer) state.buffer = makeUniqueNoThrow<uint8_t[]>(UploadState::UPLOAD_BUFFER_SIZE);
+    if (!state.buffer) {
+      state.error = tr(STR_WEB_UPLOAD_BUFFER_UNAVAILABLE);
+      return;
+    }
+
     // Open file for writing - this can be slow due to FAT cluster allocation
     resetTaskWatchdogIfSubscribed();
     if (!Storage.openFileForWrite("WEB", filePath, state.file)) {
@@ -744,6 +804,7 @@ void CrossPointWebServer::handleUpload(UploadState& state) const {
     }
     resetTaskWatchdogIfSubscribed();
 
+    state.ownsFile = true;
     LOG_DBG("WEB", "[UPLOAD] File created successfully: %s", filePath.c_str());
   } else if (upload.status == UPLOAD_FILE_WRITE) {
     if (dropUploadIfCancelled()) return;
@@ -757,7 +818,7 @@ void CrossPointWebServer::handleUpload(UploadState& state) const {
         const size_t space = UploadState::UPLOAD_BUFFER_SIZE - state.bufferPos;
         const size_t toCopy = (remaining < space) ? remaining : space;
 
-        memcpy(state.buffer.data() + state.bufferPos, data, toCopy);
+        memcpy(state.buffer.get() + state.bufferPos, data, toCopy);
         state.bufferPos += toCopy;
         data += toCopy;
         remaining -= toCopy;
@@ -790,10 +851,11 @@ void CrossPointWebServer::handleUpload(UploadState& state) const {
       if (!flushUploadBuffer(state)) {
         state.error = "Failed to write final data to SD card";
       }
-      state.file.close();
+      if (!state.file.close()) state.error = tr(STR_WEB_UPLOAD_CLOSE_FAILED);
 
       if (state.error.isEmpty()) {
         state.success = true;
+        state.ownsFile = false;
         const unsigned long elapsed = millis() - uploadStartTime;
         const float avgKbps = (elapsed > 0) ? (state.size / 1024.0) / (elapsed / 1000.0) : 0;
         const float writePercent = (elapsed > 0) ? (totalWriteTime * 100.0 / elapsed) : 0;
@@ -811,14 +873,12 @@ void CrossPointWebServer::handleUpload(UploadState& state) const {
       }
     }
   } else if (upload.status == UPLOAD_FILE_ABORTED) {
-    state.bufferPos = 0;  // Discard buffered data
-    if (state.file) {
-      state.file.close();
-      // Try to delete the incomplete file
-      String filePath = state.path;
-      if (!filePath.endsWith("/")) filePath += "/";
-      filePath += state.fileName;
-      Storage.remove(filePath.c_str());
+    state.bufferPos = 0;
+    if (state.file) state.file.close();
+    if (state.ownsFile) {
+      const String path = state.path + (state.path.endsWith("/") ? "" : "/") + state.fileName;
+      Storage.remove(path.c_str());
+      state.ownsFile = false;
     }
     state.error = "Upload aborted";
     LOG_DBG("WEB", "Upload aborted");
@@ -826,6 +886,12 @@ void CrossPointWebServer::handleUpload(UploadState& state) const {
 }
 
 void CrossPointWebServer::handleUploadPost(UploadState& state) const {
+  if (!state.success && state.ownsFile) {
+    if (state.file) state.file.close();
+    const String path = state.path + (state.path.endsWith("/") ? "" : "/") + state.fileName;
+    Storage.remove(path.c_str());
+    state.ownsFile = false;
+  }
   if (state.success) {
     server->send(200, "text/plain", "File uploaded successfully: " + state.fileName);
   } else {
@@ -871,7 +937,7 @@ void CrossPointWebServer::handleCreateFolder() const {
   folderPath += folderName;
 
   if (parentPath.isEmpty() ||
-      protectedpaths::isSensitivePath(std::string_view(folderPath.c_str(), folderPath.length()))) {
+      protectedpaths::isNetworkPathProtected(std::string_view(folderPath.c_str(), folderPath.length()))) {
     server->send(403, "text/plain", "Cannot create protected item");
     return;
   }
@@ -922,7 +988,7 @@ void CrossPointWebServer::handleRename() const {
   }
 
   const String itemName = itemPath.substring(itemPath.lastIndexOf('/') + 1);
-  if (isProtectedItemName(itemName) || protectedpaths::isSensitivePath(itemPath.c_str())) {
+  if (isProtectedItemName(itemName) || protectedpaths::isNetworkPathProtected(itemPath.c_str())) {
     server->send(403, "text/plain", "Cannot rename protected item");
     return;
   }
@@ -957,8 +1023,8 @@ void CrossPointWebServer::handleRename() const {
   }
   newPath += newName;
 
-  if (protectedpaths::isSensitivePath(itemPath.c_str()) ||
-      protectedpaths::isSensitivePath(std::string_view(newPath.c_str(), newPath.length()))) {
+  if (protectedpaths::isNetworkPathProtected(itemPath.c_str()) ||
+      protectedpaths::isNetworkPathProtected(std::string_view(newPath.c_str(), newPath.length()))) {
     file.close();
     server->send(403, "text/plain", "Cannot move protected item");
     return;
@@ -969,11 +1035,11 @@ void CrossPointWebServer::handleRename() const {
     return;
   }
 
-  clearBookCache(itemPath.c_str());
   const bool success = file.rename(newPath.c_str());
   file.close();
 
   if (success) {
+    clearBookCache(itemPath.c_str());
     LOG_DBG("WEB", "Renamed file: %s -> %s", itemPath.c_str(), newPath.c_str());
     server->send(200, "text/plain", "Renamed successfully");
   } else {
@@ -1000,8 +1066,13 @@ void CrossPointWebServer::handleMove() const {
     return;
   }
 
+  if (protectedpaths::isNetworkPathProtected(itemPath.c_str()) ||
+      protectedpaths::isNetworkPathProtected(destPath.c_str())) {
+    server->send(403, "text/plain", "Cannot move protected item");
+    return;
+  }
   const String itemName = itemPath.substring(itemPath.lastIndexOf('/') + 1);
-  if (isProtectedItemName(itemName) || protectedpaths::isSensitivePath(itemPath.c_str())) {
+  if (isProtectedItemName(itemName) || protectedpaths::isNetworkPathProtected(itemPath.c_str())) {
     server->send(403, "text/plain", "Cannot move protected item");
     return;
   }
@@ -1056,8 +1127,8 @@ void CrossPointWebServer::handleMove() const {
     server->send(200, "text/plain", "Already in destination");
     return;
   }
-  if (protectedpaths::isSensitivePath(itemPath.c_str()) ||
-      protectedpaths::isSensitivePath(std::string_view(newPath.c_str(), newPath.length()))) {
+  if (protectedpaths::isNetworkPathProtected(itemPath.c_str()) ||
+      protectedpaths::isNetworkPathProtected(std::string_view(newPath.c_str(), newPath.length()))) {
     file.close();
     server->send(403, "text/plain", "Cannot move protected item");
     return;
@@ -1068,11 +1139,11 @@ void CrossPointWebServer::handleMove() const {
     return;
   }
 
-  clearBookCache(itemPath.c_str());
   const bool success = file.rename(newPath.c_str());
   file.close();
 
   if (success) {
+    clearBookCache(itemPath.c_str());
     LOG_DBG("WEB", "Moved file: %s -> %s", itemPath.c_str(), newPath.c_str());
     server->send(200, "text/plain", "Moved successfully");
   } else {
@@ -1136,7 +1207,7 @@ void CrossPointWebServer::handleDelete() const {
     const String itemName = itemPath.substring(itemPath.lastIndexOf('/') + 1);
 
     // Hidden/system files are protected
-    if (itemName.startsWith(".") || protectedpaths::isSensitivePath(itemPath.c_str())) {
+    if (itemName.startsWith(".") || protectedpaths::isNetworkPathProtected(itemPath.c_str())) {
       failedItems += itemPath + " (hidden/system file); ";
       allSuccess = false;
       continue;
@@ -1181,8 +1252,7 @@ void CrossPointWebServer::handleDelete() const {
     } else {
       // It's a file (or couldn't open as dir) — remove file
       if (f) f.close();
-      success = Storage.remove(itemPath.c_str());
-      clearBookCache(itemPath.c_str());
+      success = removeBookFile(itemPath.c_str());
     }
 
     if (!success) {
@@ -1207,7 +1277,9 @@ void CrossPointWebServer::handleGetSettings() const {
   // Pass the SD font registry so the fontFamily setting's enumStringValues
   // includes SD-resident families — otherwise the web API only exposes the
   // three built-in fonts.
-  const auto& settings = getSettingsList(&sdFontSystem.registry());
+  std::vector<DictionaryEntry> dictionaries;
+  DictionaryRegistry::discover(dictionaries);
+  const auto& settings = getSettingsList(&sdFontSystem.registry(), &dictionaries);
 
   server->setContentLength(CONTENT_LENGTH_UNKNOWN);
   server->send(200, "application/json", "");
@@ -1219,7 +1291,7 @@ void CrossPointWebServer::handleGetSettings() const {
   JsonDocument doc;
 
   for (const auto& s : settings) {
-    if (!s.key) continue;  // Skip ACTION-only entries
+    if (!s.key || s.webHidden) continue;  // Skip ACTION-only entries
 
     doc.clear();
     doc["key"] = s.key;
@@ -1235,12 +1307,16 @@ void CrossPointWebServer::handleGetSettings() const {
         break;
       }
       case SettingType::ENUM: {
-        doc["type"] = "enum";
+        const auto labels = s.enumLabels();
+        const bool toggle = s.enumStringValues.empty() && labels.size() == 2 && labels[0] == StrId::STR_STATE_OFF &&
+                            labels[1] == StrId::STR_STATE_ON;
+        doc["type"] = toggle ? "toggle" : "enum";
         if (s.valuePtr) {
           doc["value"] = static_cast<int>(SETTINGS.*(s.valuePtr));
         } else if (s.valueGetter) {
           doc["value"] = static_cast<int>(s.valueGetter());
         }
+        if (toggle) break;
         JsonArray options = doc["options"].to<JsonArray>();
         if (!s.enumStringValues.empty()) {
           for (const auto& opt : s.enumStringValues) {
@@ -1318,15 +1394,67 @@ void CrossPointWebServer::handlePostSettings() {
     return;
   }
 
-  const auto& settings = getSettingsList(&sdFontSystem.registry());
-  int applied = 0;
+  // Validate the pair before applying any other values. Legacy URL-only requests
+  // remain harmless when unchanged; a change requires explicit profile confirmation.
+  const auto urlValue = doc["koServerUrl"];
+  const auto typeValue = doc["koServerType"];
+  const bool hasUrl = !urlValue.isNull();
+  const bool hasType = !typeValue.isNull();
+  const JsonString urlText = urlValue.as<JsonString>();
+  const std::string_view urlView =
+      urlValue.is<const char*>() ? std::string_view(urlText.c_str(), urlText.size()) : std::string_view{};
+  int pairedApplied = 0;
+  if (doc["koServerUrl"].is<JsonVariant>() || doc["koServerType"].is<JsonVariant>()) {
+    const bool unchangedUrlOnly =
+        hasUrl && urlValue.is<const char*>() && !hasType && urlView == KOREADER_STORE.getServerUrl();
+    if (!unchangedUrlOnly) {
+      if (!hasUrl || !urlValue.is<const char*>() || !hasType || !typeValue.is<unsigned>() ||
+          typeValue.as<unsigned>() > static_cast<unsigned>(KOReaderServerType::OTHER)) {
+        server->send(400, "text/plain", I18N.get(StrId::STR_SERVER_CONFIG_CONFIRM_REQUIRED));
+        return;
+      }
+      const auto type = static_cast<KOReaderServerType>(typeValue.as<unsigned>());
+      if (!KOReaderCredentialStore::isValidServerConfiguration(urlView, type)) {
+        server->send(400, "text/plain", I18N.get(StrId::STR_SERVER_CONFIG_INVALID));
+        return;
+      }
+      if (!KOREADER_STORE.saveServerConfiguration(std::string(urlView), type)) {
+        server->send(500, "text/plain", I18N.get(StrId::STR_SERVER_CONFIG_SAVE_FAILED));
+        return;
+      }
+      pairedApplied = 2;
+    }
+  }
+
+  std::vector<DictionaryEntry> dictionaries;
+  DictionaryRegistry::discover(dictionaries);
+  auto settings = getSettingsList(&sdFontSystem.registry(), &dictionaries);
+  int applied = pairedApplied;
+  // Font-size API values are indices into the selected family's physical sizes.
+  // Apply a family change first so a combined request never uses the old catalog.
+  for (const auto& info : settings) {
+    if (!info.key || strcmp(info.key, "fontFamily") != 0 || !info.valueSetter || !doc[info.key].is<int>()) continue;
+    const int index = doc[info.key].as<int>();
+    if (index >= 0 && index < static_cast<int>(info.enumStringValues.size())) {
+      info.valueSetter(static_cast<uint8_t>(index));
+      ++applied;
+      auto size = buildFontSizeSetting(&sdFontSystem.registry());
+      if (!size.enumStringValues.empty()) size.valueSetter(size.valueGetter());
+      for (auto& setting : settings) {
+        if (setting.key && strcmp(setting.key, "fontSize") == 0) setting = std::move(size);
+      }
+    }
+    break;
+  }
 
   for (const auto& s : settings) {
-    if (!s.key) continue;
+    if (!s.key || s.webHidden || strcmp(s.key, "fontFamily") == 0) continue;
+    if (strcmp(s.key, "koServerUrl") == 0 || strcmp(s.key, "koServerType") == 0) continue;
     if (!doc[s.key].is<JsonVariant>()) continue;
 
     switch (s.type) {
       case SettingType::TOGGLE: {
+        if (!doc[s.key].is<int>() && !doc[s.key].is<bool>()) continue;
         const int val = doc[s.key].as<int>() ? 1 : 0;
         if (s.valuePtr) {
           SETTINGS.*(s.valuePtr) = val;
@@ -1335,6 +1463,7 @@ void CrossPointWebServer::handlePostSettings() {
         break;
       }
       case SettingType::ENUM: {
+        if (!doc[s.key].is<int>()) continue;
         const int val = doc[s.key].as<int>();
         const int maxVal = s.enumStringValues.empty() ? static_cast<int>(s.enumLabels().size())
                                                       : static_cast<int>(s.enumStringValues.size());
@@ -1349,6 +1478,7 @@ void CrossPointWebServer::handlePostSettings() {
         break;
       }
       case SettingType::VALUE: {
+        if (!doc[s.key].is<int>()) continue;
         const int val = doc[s.key].as<int>();
         if (val >= s.valueRange.min && val <= s.valueRange.max) {
           if (s.valuePtr) {
@@ -1361,7 +1491,7 @@ void CrossPointWebServer::handlePostSettings() {
       case SettingType::STRING: {
         // A redacted GET value echoed back is not an instruction to clear a password.
         // Only an explicit string (including "") changes a credential.
-        if (s.obfuscated && !doc[s.key].is<std::string>()) continue;
+        if (!doc[s.key].is<const char*>()) continue;
         const std::string val = doc[s.key].as<std::string>();
         if (s.stringSetter) {
           s.stringSetter(val);
@@ -1721,7 +1851,7 @@ void CrossPointWebServer::onWebSocketEvent(uint8_t num, WStype_t type, uint8_t* 
           filePath += wsUploadFileName;
 
           if (wsUploadPath.isEmpty() ||
-              protectedpaths::isSensitivePath(std::string_view(filePath.c_str(), filePath.length()))) {
+              protectedpaths::isNetworkPathProtected(std::string_view(filePath.c_str(), filePath.length()))) {
             wsServer->sendTXT(num, "ERROR:Invalid or protected path");
             return;
           }
@@ -1805,7 +1935,11 @@ void CrossPointWebServer::onWebSocketEvent(uint8_t num, WStype_t type, uint8_t* 
       // Check if upload complete
       if (wsUploadReceived >= wsUploadSize) {
         // Explicit close() required: file-scope global persists beyond function scope
-        wsUploadFile.close();
+        if (!wsUploadFile.close()) {
+          abortWsUpload("WS");
+          wsServer->sendTXT(num, String("ERROR:") + tr(STR_WEB_UPLOAD_CLOSE_FAILED));
+          return;
+        }
         wsUploadInProgress = false;
         wsUploadClientNum = 255;
 
@@ -1892,6 +2026,9 @@ void CrossPointWebServer::handleFontUploadData() {
     case UPLOAD_FILE_START: {
       resetTaskWatchdogIfSubscribed();
       String family = server->arg("family");
+      if (fontUpload.file) fontUpload.file.close();
+      if (fontUpload.ownsFile) Storage.remove((fontUpload.filePath + ".davtmp").c_str());
+      fontUpload.ownsFile = false;
       fontUpload.file = HalFile();
       fontUpload.familyName.clear();
       fontUpload.filePath.clear();
@@ -1928,12 +2065,23 @@ void CrossPointWebServer::handleFontUploadData() {
       char path[128];
       FontInstaller::buildFontPath(family.c_str(), filename.c_str(), path, sizeof(path));
       fontUpload.filePath = path;
+      const std::string temp = fontUpload.filePath + ".davtmp";
+      if (Storage.exists(temp.c_str()) || Storage.exists((fontUpload.filePath + ".davbak").c_str())) {
+        LOG_ERR("WEB", "Font recovery file exists: %s", path);
+        break;
+      }
 
-      if (!Storage.openFileForWrite("WEB", path, fontUpload.file)) {
+      if (!fontUpload.buffer) fontUpload.buffer = makeUniqueNoThrow<uint8_t[]>(FontUploadState::BUFFER_SIZE);
+      if (!fontUpload.buffer) {
+        LOG_ERR("WEB", "OOM: font upload buffer");
+        break;
+      }
+      if (!Storage.openFileForWrite("WEB", temp, fontUpload.file)) {
         LOG_ERR("WEB", "Failed to open font file for write: %s", path);
         break;
       }
 
+      fontUpload.ownsFile = true;
       fontUpload.valid = true;
       LOG_DBG("WEB", "Font upload started: %s -> %s", filename.c_str(), path);
       break;
@@ -1943,29 +2091,25 @@ void CrossPointWebServer::handleFontUploadData() {
       if (dropUploadIfCancelled() || !fontUpload.valid) break;
       resetTaskWatchdogIfSubscribed();
 
-      // Validate magic bytes on first chunk only
-      if (!fontUpload.magicChecked && upload.currentSize >= 8) {
-        if (memcmp(upload.buf, "CPFONT\0\0", 8) != 0) {
-          LOG_ERR("WEB", "Invalid .cpfont magic bytes");
-          fontUpload.valid = false;
-          break;
-        }
-        fontUpload.magicChecked = true;
-      }
-
-      // Buffer writes for efficiency
       size_t remaining = upload.currentSize;
       const uint8_t* src = upload.buf;
       while (remaining > 0) {
         size_t space = FontUploadState::BUFFER_SIZE - fontUpload.bufferPos;
         size_t chunk = (remaining < space) ? remaining : space;
-        memcpy(fontUpload.buffer.data() + fontUpload.bufferPos, src, chunk);
+        memcpy(fontUpload.buffer.get() + fontUpload.bufferPos, src, chunk);
         fontUpload.bufferPos += chunk;
+        if (!fontUpload.magicChecked && fontUpload.bufferPos >= 8) {
+          if (memcmp(fontUpload.buffer.get(), "CPFONT\0\0", 8) != 0) {
+            fontUpload.valid = false;
+            break;
+          }
+          fontUpload.magicChecked = true;
+        }
         src += chunk;
         remaining -= chunk;
 
         if (fontUpload.bufferPos >= FontUploadState::BUFFER_SIZE) {
-          const size_t written = fontUpload.file.write(fontUpload.buffer.data(), fontUpload.bufferPos);
+          const size_t written = fontUpload.file.write(fontUpload.buffer.get(), fontUpload.bufferPos);
           fontUpload.bytesWritten += written;
           if (written != fontUpload.bufferPos) {
             LOG_ERR("WEB", "Font upload write failed: %s", fontUpload.filePath.c_str());
@@ -1980,9 +2124,10 @@ void CrossPointWebServer::handleFontUploadData() {
     }
 
     case UPLOAD_FILE_END: {
+      if (!fontUpload.magicChecked) fontUpload.valid = false;
       // Flush remaining buffer
       if (fontUpload.valid && fontUpload.bufferPos > 0) {
-        const size_t written = fontUpload.file.write(fontUpload.buffer.data(), fontUpload.bufferPos);
+        const size_t written = fontUpload.file.write(fontUpload.buffer.get(), fontUpload.bufferPos);
         fontUpload.bytesWritten += written;
         if (written != fontUpload.bufferPos) {
           LOG_ERR("WEB", "Font upload write failed: %s", fontUpload.filePath.c_str());
@@ -1991,13 +2136,17 @@ void CrossPointWebServer::handleFontUploadData() {
         fontUpload.bufferPos = 0;
       }
       if (fontUpload.file.isOpen()) {
-        fontUpload.file.close();
+        if (!fontUpload.file.close()) fontUpload.valid = false;
       }
 
-      if (!fontUpload.valid && !fontUpload.filePath.empty()) {
-        Storage.remove(fontUpload.filePath.c_str());
+      if (fontUpload.valid) {
+        fontUpload.valid = commitNetworkFile((fontUpload.filePath + ".davtmp").c_str(), fontUpload.filePath.c_str());
+      }
+      if (!fontUpload.valid && fontUpload.ownsFile) {
+        Storage.remove((fontUpload.filePath + ".davtmp").c_str());
       }
 
+      fontUpload.ownsFile = false;
       LOG_DBG("WEB", "Font upload end: valid=%d, %zu bytes", fontUpload.valid, fontUpload.bytesWritten);
       break;
     }
@@ -2006,9 +2155,10 @@ void CrossPointWebServer::handleFontUploadData() {
       if (fontUpload.file) {
         fontUpload.file.close();
       }
-      if (!fontUpload.filePath.empty()) {
-        Storage.remove(fontUpload.filePath.c_str());
+      if (fontUpload.ownsFile) {
+        Storage.remove((fontUpload.filePath + ".davtmp").c_str());
       }
+      fontUpload.ownsFile = false;
       fontUpload.valid = false;
       LOG_DBG("WEB", "Font upload aborted");
       break;

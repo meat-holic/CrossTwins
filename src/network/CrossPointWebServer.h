@@ -1,5 +1,6 @@
 #pragma once
 
+#include <ArduinoJson.h>
 #include <HalStorage.h>
 #include <NetworkUdp.h>
 #include <WebServer.h>
@@ -36,16 +37,15 @@ class CrossPointWebServer {
     String path = "/";
     size_t size = 0;
     bool success = false;
+    bool ownsFile = false;
     String error = "";
 
     // Upload write buffer - batches small writes into larger SD card operations
     // 4KB is a good balance: large enough to reduce syscall overhead, small enough
     // to keep individual write times short and avoid watchdog issues
     static constexpr size_t UPLOAD_BUFFER_SIZE = 4096;  // 4KB buffer
-    std::vector<uint8_t> buffer;
+    std::unique_ptr<uint8_t[]> buffer;
     size_t bufferPos = 0;
-
-    UploadState() { buffer.resize(UPLOAD_BUFFER_SIZE); }
   } upload;
 
   CrossPointWebServer();
@@ -102,6 +102,11 @@ class CrossPointWebServer {
   void handleFileList() const;
   void handleFileListData() const;
   void handleDownload() const;
+  // Streams an already-open file to the client in 4KB chunks, feeding the
+  // watchdog per write and aborting cleanly (rather than looping past a dead
+  // connection) if a write stalls. Caller sets headers/content-length and
+  // closes the file.
+  void streamFileToClient(HalFile& file) const;
   void handleUpload(UploadState& state) const;
   void handleUploadPost(UploadState& state) const;
   void handleCreateFolder() const;
@@ -127,13 +132,13 @@ class CrossPointWebServer {
     std::string familyName;
     std::string filePath;
     bool valid = false;
+    bool ownsFile = false;
     bool magicChecked = false;
+    bool isVector = false;  // .ttf/.otf upload (PSRAM boards only) vs .cpfont
     size_t bytesWritten = 0;
     static constexpr size_t BUFFER_SIZE = 4096;
-    std::vector<uint8_t> buffer;
+    std::unique_ptr<uint8_t[]> buffer;
     size_t bufferPos = 0;
-
-    FontUploadState() { buffer.resize(BUFFER_SIZE); }
   } fontUpload;
 
   // OPDS server handlers

@@ -6,6 +6,8 @@
 #include <map>
 #include <string>
 #include <vector>
+#include <set>
+#include <Memory.h>
 #define LOG_DBG(...) ((void)0)
 #define LOG_ERR(...) ((void)0)
 void resetTaskWatchdogIfSubscribed() {}
@@ -20,20 +22,35 @@ struct HalFile {
   std::string path;
   bool isOpen() const { return opened; }
   explicit operator bool() const { return opened; }
-  void close() { opened = false; }
+  bool close() { opened = false; return true; }
+  bool isDirectory() const;
   size_t write(const uint8_t* p, size_t n);
 };
 struct StorageAdapter {
+  enum class ReadOpenResult { Ok, IoFailure, ResourceFailure };
+  std::set<std::string> directories;
   std::map<std::string, std::vector<uint8_t>> files;
   std::vector<std::string> mutations;
   std::vector<size_t> limits, requests;
   bool removeFails = false;
   bool exists(const char* p) const { return files.contains(p); }
-  bool mkdir(const char* p) { mutations.emplace_back(std::string("mkdir:") + p); files[p] = {}; return true; }
+  bool mkdir(const char* p) { mutations.emplace_back(std::string("mkdir:") + p); files[p] = {}; directories.insert(p); return true; }
+  ReadOpenResult openFileForReadChecked(const char*, const char* p, HalFile& f) {
+    if (!exists(p)) return ReadOpenResult::IoFailure;
+    f={true,p}; return ReadOpenResult::Ok;
+  }
+  bool rename(const char* from, const char* to) {
+    mutations.emplace_back(std::string("rename:")+to);
+    if(!exists(from)||exists(to))return false;
+    files[to]=std::move(files[from]);files.erase(from);return true;
+  }
   bool openFileForWrite(const char*, const char* p, HalFile& f) {
     mutations.emplace_back(std::string("truncate:") + p);
     files[p].clear(); // Production SDCardManager opens with O_TRUNC.
     f = {true, p}; return true;
+  }
+  bool openFileForWrite(const char* module, const std::string& p, HalFile& f) {
+    return openFileForWrite(module, p.c_str(), f);
   }
   bool remove(const char* p) {
     mutations.emplace_back(std::string("remove:") + p);
@@ -41,6 +58,9 @@ struct StorageAdapter {
     files.erase(p); return true;
   }
 } Storage;
+bool HalFile::isDirectory() const { return Storage.directories.contains(path); }
+using HalStorage=StorageAdapter;
+@FONT_COMMIT@
 size_t HalFile::write(const uint8_t* p, size_t n) {
   const auto call = Storage.requests.size();
   Storage.requests.push_back(n);
@@ -59,6 +79,7 @@ class FontInstaller {
   explicit FontInstaller(int&) {}
   static bool isValidFamilyName(const char*);
   static bool isValidCpfontFilename(const char*);
+  static bool isValidVectorFontFilename(const char*);
   bool ensureFamilyDir(const char*);
   static void buildFontPath(const char*, const char*, char*, size_t);
 };
@@ -95,6 +116,7 @@ class FontUpload : public testing::Test {
  protected:
   CrossPointWebServer web;
   const std::string path = "/.fonts/Pretendard/Regular.cpfont";
+  const std::string tempPath = path + ".davtmp";
   void SetUp() override { Storage = {}; sdFontSystem = {}; SdCardFontRegistry::existingRoot = nullptr; }
   void event(int status) { web.backing.incoming.status = status; web.handleFontUploadData(); }
   std::vector<uint8_t> data(size_t n) {
@@ -130,7 +152,7 @@ TEST_F(FontUpload, IntermediateShortWriteStopsCurrentAndSubsequentChunks) {
   auto bytes = data(4096 * 3 + 17); chunk(bytes);
   EXPECT_FALSE(web.fontUpload.valid);
   EXPECT_EQ(web.fontUpload.bytesWritten, 4096 + 13u);
-  EXPECT_EQ(Storage.files[path].size(), 4096 + 13u);
+  EXPECT_EQ(Storage.files[tempPath].size(), 4096 + 13u);
   EXPECT_EQ(Storage.requests.size(), 2u);
   chunk(bytes); EXPECT_EQ(Storage.requests.size(), 2u);
   end(); failed();
@@ -148,11 +170,20 @@ TEST_F(FontUpload, FinalBufferedZeroWriteFails) {
   Storage.limits = {0}; event(UPLOAD_FILE_START); auto bytes = data(17); chunk(bytes); end();
   EXPECT_EQ(web.fontUpload.bytesWritten, 0u); failed();
 }
-TEST_F(FontUpload, FailedReplacementCannotRestoreAlreadyTruncatedExistingFont) {
-  Storage.files[path] = data(123); event(UPLOAD_FILE_START);
-  ASSERT_TRUE(Storage.files[path].empty());
-  Storage.limits = {1}; auto bytes = data(17); chunk(bytes); end(); failed();
-  EXPECT_EQ(Storage.mutations.back(), "remove:" + path);
+TEST_F(FontUpload, FailedReplacementPreservesExistingFontAndRemovesOnlyOwnedTemp) {
+  const auto original = data(123);
+  Storage.files[path] = original; event(UPLOAD_FILE_START);
+  ASSERT_EQ(Storage.files[path], original);
+  Storage.limits = {1}; auto bytes = data(17); chunk(bytes); end();
+  EXPECT_FALSE(web.fontUpload.valid);
+  EXPECT_FALSE(web.fontUpload.file.isOpen());
+  EXPECT_EQ(web.backing.status, 400);
+  EXPECT_EQ(web.backing.response, "{\"error\":\"Invalid .cpfont file\"}");
+  EXPECT_FALSE(sdFontSystem.dirty);
+  EXPECT_EQ(Storage.files[path], original);
+  EXPECT_FALSE(Storage.files.contains(tempPath));
+  EXPECT_FALSE(Storage.files.contains(path + ".davbak"));
+  EXPECT_EQ(Storage.mutations.back(), "remove:" + tempPath);
 }
 TEST_F(FontUpload, AbortedShortWriteClosesAndRemovesDestination) {
   Storage.limits = {1}; event(UPLOAD_FILE_START); auto bytes = data(4096); chunk(bytes);
@@ -163,8 +194,9 @@ TEST_F(FontUpload, CleanupFailureStillReportsFailureButCanLeavePartialFile) {
   event(UPLOAD_FILE_START); auto bytes = data(17); chunk(bytes); end();
   EXPECT_FALSE(web.fontUpload.valid); EXPECT_FALSE(web.fontUpload.file.isOpen());
   EXPECT_EQ(web.backing.status, 400); EXPECT_FALSE(sdFontSystem.dirty);
-  EXPECT_EQ(Storage.files[path].size(), 5u); EXPECT_EQ(web.fontUpload.bytesWritten, 5u);
-  EXPECT_EQ(Storage.mutations.back(), "remove:" + path);
+  EXPECT_EQ(Storage.files[tempPath].size(), 5u); EXPECT_EQ(web.fontUpload.bytesWritten, 5u);
+  EXPECT_FALSE(Storage.files.contains(path));
+  EXPECT_EQ(Storage.mutations.back(), "remove:" + tempPath);
 }
 TEST_F(FontUpload, NextUploadResetsFailureAndAccounting) {
   Storage.limits = {0}; event(UPLOAD_FILE_START); auto bytes = data(4096); chunk(bytes); end(); failed();

@@ -64,10 +64,10 @@ uint8_t CrossPointSettings::sleepTimeoutEnumToMinutes(const uint8_t legacyValue)
 void CrossPointSettings::toJson(JsonDocument& doc) const {
   const CrossPointSettings& s = *this;
 
-  for (const auto& info : getSettingsList()) {
-    if (!info.key) continue;
+  auto visit = [&](const SettingInfo& info) {
+    if (!info.key) return;
     // Dynamic entries (KOReader etc.) are stored in their own files — skip.
-    if (!info.valuePtr && !info.stringOffset) continue;
+    if (!info.valuePtr && !info.stringOffset) return;
 
     if (info.stringOffset) {
       const char* strPtr = (const char*)&s + info.stringOffset;
@@ -81,7 +81,8 @@ void CrossPointSettings::toJson(JsonDocument& doc) const {
     } else {
       doc[info.key] = s.*(info.valuePtr);
     }
-  }
+  };
+  forEachBaseSetting(visit);
 
   // Keep the legacy key stable for older settings consumers, but never persist
   // Focus Reading as enabled.
@@ -106,7 +107,7 @@ void CrossPointSettings::toJson(JsonDocument& doc) const {
   }
 
   // Language -- managed by LanguageSelectActivity, not in SettingsList.
-  // Stored as ISO code string ("EN", "DE", ...) for stability across enum reorders.
+  // Stored as ISO code string ("EN" or "KO") for stability across enum reorders.
   doc["language"] = (language < getLanguageCount()) ? LANGUAGE_CODES[language] : "EN";
 
   // A uint16_t mask, so it does not fit the uint8_t generic loop. Omitted while
@@ -124,10 +125,10 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
 
   auto clamp = [](uint8_t val, uint8_t maxVal, uint8_t def) -> uint8_t { return val < maxVal ? val : def; };
 
-  for (const auto& info : getSettingsList()) {
-    if (!info.key) continue;
+  auto visit = [&](const SettingInfo& info) {
+    if (!info.key) return;
     // Dynamic entries (KOReader etc.) are stored in their own files — skip.
-    if (!info.valuePtr && !info.stringOffset) continue;
+    if (!info.valuePtr && !info.stringOffset) return;
 
     if (info.stringOffset) {
       // destPtr starts out holding the struct-initializer default; it stays that
@@ -137,7 +138,7 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
         LOG_ERR("CPS", "Misconfigured SettingInfo: stringMaxLen is 0 for key '%s'", info.key);
         destPtr[0] = '\0';
         needsResave = true;
-        continue;
+        return;
       }
 
       bool loaded = false;
@@ -183,7 +184,8 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
       }
       s.*(info.valuePtr) = v;
     }
-  }
+  };
+  forEachBaseSetting(visit);
 
   // Retain compatibility with settings files written before Focus Reading was
   // retired, then normalize the runtime value and saved format to disabled.
@@ -268,9 +270,8 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
   copyToField(dictionaryName, doc["dictionaryName"] | "", sizeof(dictionaryName));
 
   // Language -- stored as code string for stability across enum reorders.
-  if (doc["language"].is<const char*>()) {
-    language = static_cast<uint8_t>(I18n::languageFromCode(doc["language"].as<const char*>()));
-  }
+  // Missing or unsupported values use English, including on repeated loads.
+  language = static_cast<uint8_t>(I18n::languageFromCode(doc["language"] | "EN"));
 
   // Absent means unconfigured, which is the default.
   if (doc["keyboardLayouts"].is<uint16_t>()) {
@@ -283,7 +284,9 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
                                                                 static_cast<int>(MAX_SLIDESHOW_INTERVAL_SECONDS)));
   }
 
-  if (!bleturner::readJson(ble, doc)) needsResave = true;
+  if (!bleturner::readJson(ble, doc)) {
+    needsResave = true;
+  }
 
   if (needsResave) {
     LOG_DBG("CPS", "Resaving settings to update format");

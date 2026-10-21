@@ -114,6 +114,57 @@ if (parsedSize != fileSize) {
 
 ## `section.bin`
 
+### CrossTwins integration version 128 (upstream 2.0.0rc experiment)
+
+This integration retains the CT v51 byte layout and SD-font/paragraph contracts;
+it does not read the incompatible upstream v64 page/block payload. Version 128
+invalidates older layouts because stored CSS is now applied even below 48 KiB
+free heap and pending words are flushed before a new heading/block begins.
+The finalized version is 128, incomplete writes use 0, and suspended partials
+use 154 (`0xFE - (128 - 28)`). Only 128/154 are accepted. CT 51/231 and upstream
+64/218 are rejected before page decoding and only the affected section and its
+`.part` file are removed. Progress, bookmarks, book metadata and TXT checkpoints
+are not removed by section invalidation.
+
+The header remains 44 bytes on ESP32 (little-endian):
+
+| Offset | Field | Type |
+|---:|---|---|
+| 0 | version | uint8 |
+| 1 | fontId | int32 |
+| 5 | lineCompression | float32 |
+| 9 | extraParagraphSpacing | bool8 |
+| 10 | paragraphIndentSpaces | uint8 |
+| 11 | paragraphAlignment | uint8 |
+| 12 / 14 | viewport width / height | uint16 each |
+| 16 / 17 / 18 / 19 | hyphenation / embeddedStyle / imageRendering / focusReading | uint8 each |
+| 20 / 21 | characterSpacing / wordSpacingPercent | int8 / uint8 |
+| 22 | pageCount | uint16 |
+| 24 / 28 / 32 / 36 / 40 | page / anchor / paragraph / list-item / visible-offset LUT positions | uint32 each |
+
+CT TextBlock writes `uint16 wordCount`, `uint8 hasFocus`, `uint16 textBytes`,
+its flat word arena, one length-prefixed UTF-8 ruby string per word, then the
+alignment/inset/indent/direction/tracking BlockStyle fields. A page writes its
+element count and tagged elements, followed by footnote count/fixed records and
+link count/fixed href plus x/y/width/height records. Partials append two uint32
+watermarks (bytesConsumed, totalBytes) after the visible-offset LUT.
+SourceRange, paragraphStartWord, per-word font slots, drop-cap and border payloads
+from upstream are not part of this format. The historical ImHex pattern below
+is a **v50 reference only**, not a reader for 128/154: it predates ruby strings
+and page link records and must not be used by changing only EXPECTED_VERSION.
+Current writer/reader functions in Section.cpp, Page.cpp and TextBlock.cpp are
+authoritative. CSS remains cache
+version 12; book metadata remains version 10. The 32-spine sparse size window is
+RAM-only and does not alter book.bin. Existing progress4/6/10-byte formats,
+visible offsets, anchors, bookmarks and Lyra snapshot reads are retained.
+
+Header/commit short writes and failed seeks/closes fail the build before a file
+is promoted. Version 0 is written first and the final/partial version last.
+Promotion still uses remove + rename on the SD filesystem: it is not a filesystem
+transaction, and power loss in that gap can require rebuilding the derived cache.
+Full firmware, SD power-loss behavior and rendering appearance require later
+integration/device validation.
+
 ### Version 51
 
 The serialized layout remains version 50's layout. Cached line positions change:

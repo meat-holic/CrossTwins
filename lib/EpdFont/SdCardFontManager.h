@@ -1,8 +1,8 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
 #include <string>
-#include <vector>
 
 class GfxRenderer;
 class SdCardFont;
@@ -11,7 +11,7 @@ struct SdCardFontFileInfo;
 
 class SdCardFontManager {
  public:
-  SdCardFontManager() = default;
+  SdCardFontManager();
   ~SdCardFontManager();
   SdCardFontManager(const SdCardFontManager&) = delete;
   SdCardFontManager& operator=(const SdCardFontManager&) = delete;
@@ -37,17 +37,16 @@ class SdCardFontManager {
   uint8_t currentPointSize() const { return loadedPointSize_; };
 
  private:
-  struct LoadedFont {
-    SdCardFont* font;  // heap-allocated, owned
-    int fontId;
-  };
   static int computeFontId(uint32_t contentHash, const char* familyName, uint8_t pointSize);
 
-  // Load+register a single .cpfont file and append it to loaded_.
+  // Load+register a single .cpfont file and retain it as the single reader family.
   // Returns the font id, or 0 on failure (allocation, read, or id collision).
   int loadFile(const SdCardFontFileInfo& file, const char* familyName, GfxRenderer& renderer);
 
   std::string loadedFamilyName_;
   uint8_t loadedPointSize_ = 0;
-  std::vector<LoadedFont> loaded_;
+  // Renderer must outlive this manager; it only borrows the owned font.
+  GfxRenderer* renderer_ = nullptr;
+  std::unique_ptr<SdCardFont> loadedFont_;
+  int loadedFontId_ = 0;
 };

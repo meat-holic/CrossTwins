@@ -4,6 +4,7 @@
 #include <HalStorage.h>
 #include <I18n.h>
 #include <Logging.h>
+#include <TrustedTime.h>
 #include <WiFi.h>
 #include <esp_wifi.h>
 
@@ -23,6 +24,7 @@
 #include "components/UITheme.h"
 #include "components/UiAppHelpers.h"  // list icons for the compare rows
 #include "fontIds.h"
+#include "network/WifiPowerSaveGuard.h"
 
 namespace fui = freeink::ui;
 
@@ -138,6 +140,7 @@ void KOReaderSyncActivity::onWifiSelectionComplete(const bool success) {
 }
 
 void KOReaderSyncActivity::performSync() {
+  WifiPowerSaveGuard psGuard;
   const DocumentMatchMethod primaryMethod = KOREADER_STORE.getMatchMethod();
   documentHash = calculateDocumentHashForMethod(epubPath, primaryMethod);
   if (documentHash.empty()) {
@@ -242,6 +245,7 @@ void KOReaderSyncActivity::performSync() {
       const SavedProgressPosition koPos = {progress.progress, progress.percentage};
       CrossPointPosition mapped =
           ProgressMapper::toCrossPoint(epub, koPos, renderer, localPosition.spineIndex, localPosition.totalPages);
+      if (mapped.spineIndex < 0) return mapped;  // No fallback after a failed size read.
       if (!mapped.hasVisibleTextOffset && progress.position.has_value()) {
         // toCrossPoint above already tried koPos.xpath; if the rich position carries the same XPath,
         // tell fromRichPosition to skip re-resolving it and use its page hints directly.
@@ -254,9 +258,18 @@ void KOReaderSyncActivity::performSync() {
     };
 
     remotePosition = mapRemoteProgress(remoteProgress);
+    if (remotePosition.spineIndex < 0) {
+      LOG_ERR("KOSync", "Cannot map remote progress; preserving local position");
+      // The surrounding mapping scope already owns the non-recursive RenderLock.
+      state = SYNC_FAILED;
+      statusMessage = "";  // Existing translated sync-failed heading is displayed.
+      requestUpdate(true);
+      return;
+    }
     if (hasAlternateProgress) {
       const CrossPointPosition alternatePosition = mapRemoteProgress(alternateProgress);
-      if (selectRemoteRecord(remotePosition, remoteProgress.percentage, alternatePosition,
+      if (alternatePosition.spineIndex >= 0 &&
+          selectRemoteRecord(remotePosition, remoteProgress.percentage, alternatePosition,
                              alternateProgress.percentage) == RemoteRecordChoice::Alternate) {
         remoteProgress = std::move(alternateProgress);
         remotePosition = alternatePosition;
@@ -313,10 +326,9 @@ void KOReaderSyncActivity::performUpload() {
   progress.progress = localProgress.xpath;
   progress.percentage = localProgress.percentage;
 
-  // Rich CrossPoint position for the default CrossPoint sync server (lossless
-  // CrossPoint<->CrossPoint sync). The HTTP client also enforces this boundary
-  // before serializing the extension.
-  if (KOREADER_STORE.usesCrossPointSyncServer()) {
+  // Rich position for server profiles that explicitly support the CrossPoint extension.
+  // The HTTP client enforces the same boundary before serializing the extension.
+  if (KOREADER_STORE.supportsRichProgress()) {
     KOReaderRichPosition pos;
     const float pct = localProgress.percentage < 0.0f   ? 0.0f
                       : localProgress.percentage > 1.0f ? 1.0f
@@ -355,7 +367,12 @@ void KOReaderSyncActivity::performUpload() {
   // (consistent with the release-before-sync pattern in performSync); nothing below needs it.
   epub.reset();
 
-  const auto result = KOReaderSyncClient::updateProgress(progress);
+  KOReaderSyncClient::Error result;
+  {
+    // Restore power-save before esp_wifi_stop below; set_ps on a stopped radio fails.
+    WifiPowerSaveGuard psGuard;
+    result = KOReaderSyncClient::updateProgress(progress);
+  }
 
   // Drop the radio while user reads the result; full teardown happens at silent reboot.
   esp_wifi_stop();

@@ -1,0 +1,186 @@
+// Keep the original sparse tests and assertions in this same translation unit.
+#include "@CMAKE_CURRENT_SOURCE_DIR@/BookMetadataCacheTest.cpp"
+#include <KOReaderSync/CrossPointPosition.h>
+#include <optional>
+
+#define LOG_ERR(...) ((void)0)
+struct RenderLock {
+  inline static int depth = 0;
+  RenderLock() { EXPECT_EQ(depth, 0) << "non-recursive production render mutex"; ++depth; }
+  template <class T> explicit RenderLock(T&) : RenderLock() {}
+  ~RenderLock() { --depth; }
+};
+int clampPercent(int percent) { return std::clamp(percent, 0, 100); }
+struct Epub {
+  BookMetadataCache& cache;
+  bool failBounds = false;
+  size_t getBookSize() { return cache.getCumulativeSize(cache.getSpineCount() - 1); }
+  int getSpineItemsCount() { return cache.getSpineCount(); }
+  int getSpineIndexForSize(size_t size) { return cache.getSpineIndexForSize(size); }
+  bool tryGetSpineBounds(int index, size_t& start, size_t& end) {
+    if (failBounds) {
+      cache.getCumulativeSize(0);  // Another UI lookup can evict the selected window.
+      HalFileTest::readBytesLeft = 0;
+    }
+    uint32_t first = 0, last = 0;
+    if (!cache.tryGetSpineBounds(index, first, last)) return false;
+    start = first; end = last;
+    return true;
+  }
+};
+struct ProgressChangeResult {
+  bool hasVisibleTextOffset = false, hasSavedProgress = true;
+  int spineIndex = 70, page = 3, totalPages = 20;
+  size_t visibleTextOffset = 0;
+  std::string xpath;
+  float percentage = 0.75f;
+};
+struct ProgressMapper {
+  static CrossPointPosition toCrossPoint(const std::shared_ptr<Epub>&, const std::pair<std::string, float>&,
+                                        int, int, int);
+};
+struct SectionStub {
+  int currentPage = 5;
+  int estimatedTotalPages() { return 10; }
+  std::optional<int> getPageForVisibleTextOffset(size_t) { return std::nullopt; }
+};
+struct EpubReaderActivity {
+  std::shared_ptr<Epub> epub;
+  int currentSpineIndex = 7, nextPageNumber = 5;
+  float pendingSpineProgress = 0.4f;
+  bool pendingPercentJump = false;
+  std::unique_ptr<SectionStub> section = std::make_unique<SectionStub>();
+  int cachedChapterTotalPageCount = 10, renderer = 0;
+  std::optional<size_t> pendingOffsetJump;
+  int clears = 0, paints = 0;
+  void clearDeferredReposition() { ++clears; }
+  void requestUpdate() { ++paints; }
+  void jumpToPercent(int);
+  void applyProgressChange(const ProgressChangeResult&);
+};
+@JUMP@
+@APPLY@
+CrossPointPosition selectRemote(Epub* epub, int xpathSpine, size_t targetBytes, int currentSpineIndex = 7,
+                               int totalPagesInCurrentSpine = 0) {
+  CrossPointPosition result{};
+  result.spineIndex = -1;
+  const int spineCount = epub->getSpineItemsCount();
+@MAP@
+  return result;
+}
+CrossPointPosition ProgressMapper::toCrossPoint(const std::shared_ptr<Epub>& epub,
+    const std::pair<std::string, float>& progress, int, int current, int pages) {
+  return selectRemote(epub.get(), -1, static_cast<size_t>(epub->getBookSize() * progress.second), current, pages);
+}
+struct SyncBoundary {
+  enum State { SYNCING, SYNC_FAILED } state = SYNCING;
+  CrossPointPosition remotePosition{};
+  std::string statusMessage;
+  bool persisted = false;
+  void requestUpdate(bool) {}
+  void applyMapped() {
+    RenderLock outerLock;
+@SYNC_GUARD@
+    persisted = true;
+  }
+};
+TEST(BookMetadataCachePosition, SingleRefillFailureKeepsReaderPositionAndCanRetry) {
+  const auto cumulative = buildBook(cacheDir(), 100);
+  BookMetadataCache cache(cacheDir());
+  ASSERT_TRUE(cache.load());
+  EpubReaderActivity reader;
+  reader.epub = std::make_shared<Epub>(Epub{cache});
+  HalFileTest::readBytesLeft = 0;
+  reader.jumpToPercent(75);
+  HalFileTest::readBytesLeft = SIZE_MAX;
+  EXPECT_EQ(reader.currentSpineIndex, 7);
+  EXPECT_EQ(reader.nextPageNumber, 5);
+  EXPECT_FLOAT_EQ(reader.pendingSpineProgress, 0.4f);
+  EXPECT_FALSE(reader.pendingPercentJump);
+  EXPECT_NE(reader.section, nullptr);
+  EXPECT_EQ(reader.clears, 0);
+  reader.jumpToPercent(75);
+  const size_t target = cumulative.back() / 100 * 75 + cumulative.back() % 100 * 75 / 100;
+  const int expected = std::lower_bound(cumulative.begin(), cumulative.end(), target) - cumulative.begin();
+  EXPECT_EQ(reader.currentSpineIndex, expected);
+  EXPECT_TRUE(reader.pendingPercentJump);
+}
+TEST(BookMetadataCachePosition, BoundsFailureAfterSuccessfulIndexDoesNotCommitAJump) {
+  buildBook(cacheDir(), 100);
+  BookMetadataCache cache(cacheDir());
+  ASSERT_TRUE(cache.load());
+  EpubReaderActivity reader;
+  reader.epub = std::make_shared<Epub>(Epub{cache, true});
+  reader.jumpToPercent(75);
+  HalFileTest::readBytesLeft = SIZE_MAX;
+  EXPECT_EQ(reader.currentSpineIndex, 7);
+  EXPECT_EQ(reader.nextPageNumber, 5);
+  EXPECT_FALSE(reader.pendingPercentJump);
+  EXPECT_EQ(reader.paints, 0);
+}
+TEST(BookMetadataCachePosition, FailedSyncMappingCannotSaveOrFallbackToAnotherSpine) {
+  const auto cumulative = buildBook(cacheDir(), 100);
+  BookMetadataCache cache(cacheDir());
+  ASSERT_TRUE(cache.load());
+  Epub epub{cache};
+  HalFileTest::readBytesLeft = 0;
+  const auto failed = selectRemote(&epub, -1, cumulative[70]);
+  HalFileTest::readBytesLeft = SIZE_MAX;
+  EXPECT_EQ(failed.spineIndex, -1);
+  SyncBoundary boundary;
+  boundary.remotePosition = failed;
+  boundary.applyMapped();
+  EXPECT_FALSE(boundary.persisted);
+  EXPECT_EQ(boundary.state, SyncBoundary::SYNC_FAILED);
+  EXPECT_EQ(selectRemote(&epub, -1, cumulative[70]).spineIndex, 70);
+}
+
+TEST(BookMetadataCachePosition, SavedBookmarkMappingFailurePreservesReaderAndCanRetry) {
+  buildBook(cacheDir(), 100);
+  BookMetadataCache cache(cacheDir());
+  ASSERT_TRUE(cache.load());
+  EpubReaderActivity reader;
+  reader.epub = std::make_shared<Epub>(Epub{cache});
+  ProgressChangeResult saved;
+  HalFileTest::readBytesLeft = 0;
+  reader.applyProgressChange(saved);
+  HalFileTest::readBytesLeft = SIZE_MAX;
+  EXPECT_EQ(reader.currentSpineIndex, 7);
+  EXPECT_EQ(reader.nextPageNumber, 5);
+  EXPECT_NE(reader.section, nullptr);
+  EXPECT_EQ(reader.clears, 0);
+  EXPECT_EQ(reader.paints, 0);
+  reader.applyProgressChange(saved);
+  EXPECT_GE(reader.currentSpineIndex, 0);
+  EXPECT_NE(reader.currentSpineIndex, 7);
+  EXPECT_EQ(reader.paints, 1);
+}
+
+TEST(BookMetadataCachePosition, InvalidRawPositionsNeverReplaceVisibleState) {
+  buildBook(cacheDir(), 100);
+  BookMetadataCache cache(cacheDir());
+  ASSERT_TRUE(cache.load());
+  for (const auto [spine, page] : {std::pair{-1, 0}, std::pair{100, 0}, std::pair{7, -1}}) {
+    EpubReaderActivity reader;
+    reader.epub = std::make_shared<Epub>(Epub{cache});
+    ProgressChangeResult saved;
+    saved.hasSavedProgress = false;
+    saved.spineIndex = spine;
+    saved.page = page;
+    reader.applyProgressChange(saved);
+    EXPECT_EQ(reader.currentSpineIndex, 7);
+    EXPECT_EQ(reader.section->currentPage, 5);
+    EXPECT_EQ(reader.nextPageNumber, 5);
+    EXPECT_EQ(reader.clears, 0);
+    EXPECT_EQ(reader.paints, 0);
+  }
+}
+
+TEST(BookMetadataCachePosition, LateResultWithoutBookDoesNotChangeState) {
+  EpubReaderActivity reader;
+  ProgressChangeResult saved;
+  reader.applyProgressChange(saved);
+  EXPECT_EQ(reader.currentSpineIndex, 7);
+  EXPECT_EQ(reader.section->currentPage, 5);
+  EXPECT_EQ(reader.clears, 0);
+}

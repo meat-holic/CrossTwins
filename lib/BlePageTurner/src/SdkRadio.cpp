@@ -7,6 +7,7 @@
 #include <esp_timer.h>
 
 #include <atomic>
+#include <cstring>
 
 #include "RadioPort.h"
 #include "freertos/FreeRTOS.h"
@@ -77,7 +78,19 @@ bool popKey(KeyPress& out) {
 // turn. pick 0: only the chosen remote is armed (the SDK's selected plan never tries another bond).
 bool armBondedReconnect(const uint8_t pick, const char* priorityAddr) {
   if (pick != 0) return false;
-  return priorityAddr != nullptr && priorityAddr[0] != '\0' && hid().armSelectedPeerReconnect(priorityAddr);
+  bool bonded = false;
+  if (priorityAddr != nullptr && priorityAddr[0] != '\0') {
+    for (uint8_t i = 0; i < hid().pairedCount(); ++i) {
+      if (strncmp(priorityAddr, hid().paired(i).addr, sizeof(Config::peerAddr)) == 0) bonded = true;
+    }
+  }
+  if (!bonded || (hid().isConnected() && strncmp(priorityAddr, hid().connectedAddr(), sizeof(Config::peerAddr)) != 0)) {
+    // No valid selected plan would otherwise let SDK poll() fall back to any bond.
+    hid().disconnect();
+    return false;
+  }
+  // False can also mean a valid plan already exists, or its chosen peer is linked/busy.
+  return hid().armSelectedPeerReconnect(priorityAddr);
 }
 Peer linked() { return peerOf(hid().connectedAddr(), hid().connectedName()); }
 

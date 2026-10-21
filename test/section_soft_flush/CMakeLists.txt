@@ -1,7 +1,10 @@
 production_slice(SECTION_VERSIONS lib/Epub/Epub/Section.cpp
-  "constexpr uint8_t SECTION_FILE_VERSION" "constexpr uint32_t HEADER_SIZE")
+  "constexpr uint8_t SECTION_FILE_VERSION" "}  // namespace")
 production_slice(SECTION_GATE lib/Epub/Epub/Section.cpp
   "bool Section::loadSectionFile(" "    int fileFontId;")
+production_slice(SECTION_CLEAR lib/Epub/Epub/Section.cpp
+  "bool Section::clearCache() const" "bool Section::createSectionFile(")
+string(REPLACE "Section::clearCache()" "Section::clearCacheImpl()" SECTION_CLEAR "${SECTION_CLEAR}")
 configure_file(SectionSoftFlushTest.cpp.in SectionSoftFlushTest.cpp @ONLY)
 add_executable(SectionSoftFlushTest "${CMAKE_CURRENT_BINARY_DIR}/SectionSoftFlushTest.cpp")
 target_include_directories(SectionSoftFlushTest PRIVATE
