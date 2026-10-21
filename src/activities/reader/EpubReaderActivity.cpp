@@ -479,28 +479,6 @@ void EpubReaderActivity::loop() {
     }
   }
 
-  {
-    RenderLock lock(RenderLock::Mode::Try);
-    // Not under an open toolbar or panel: those repaint straight onto the page in the framebuffer.
-    if (lock.ownsLock() && overlay == Overlay::None && backgroundBuildWanted() && buildTickHeapGate()) {
-      // A build step can lend the framebuffer (image probes), which hands it back white while the
-      // panel still shows the page; redraw so nothing is later painted over the blank buffer.
-      const uint32_t loansBefore = renderer.frameBufferLoanCount();
-      const bool built = section->buildSomeMore(BACKGROUND_BUILD_PAGES_PER_TICK);
-      if (renderer.frameBufferLoanCount() != loansBefore) {
-        pageBufferStale = true;
-        requestUpdate();
-      }
-      if (!built) {
-        LOG_ERR("ERS", "Background section build failed");
-        section.reset();
-        requestUpdate();
-      } else if (section->isBuildComplete() && applyDeferredReposition()) {
-        requestUpdate();
-      }
-    }
-  }
-
   const bool atEndOfBook = currentSpineIndex > 0 && currentSpineIndex >= epub->getSpineItemsCount();
   clearEndOfBookOptionsIfNeeded();
 
@@ -678,6 +656,7 @@ void EpubReaderActivity::loop() {
     } else {
       openReaderMenu();
     }
+    return;
   }
 
   if (footnoteDepth > 0 && mappedInput.wasReleased(MappedInputManager::Button::Back) &&
@@ -720,6 +699,7 @@ void EpubReaderActivity::loop() {
   prevTriggered = prevTriggered || touch.prev;
   nextTriggered = nextTriggered || touch.next;
   if (!prevTriggered && !nextTriggered) {
+    backgroundBuildTick();
     return;
   }
 
@@ -1219,12 +1199,44 @@ void EpubReaderActivity::onReturnFromEndOfBook() {
   }
 }
 
-// The look-ahead never builds next to the radio. While the radio is stopped for a build it runs to
-// the end of the chapter, so the radio comes back with no parser alive.
+// An idle build finishes the chapter so its parser can be released. A spine that
+// failed background work remains demand-built until the reader is reopened.
+namespace {
+bool paginationInputPending() { return gpio.rawInputActive(); }
+}  // namespace
+
+bool EpubReaderActivity::anyButtonPressed() const {
+  using Button = MappedInputManager::Button;
+  for (const Button button :
+       {Button::Back, Button::Confirm, Button::Left, Button::Right, Button::Up, Button::Down, Button::Power}) {
+    if (mappedInput.isPressed(button)) return true;
+  }
+  return false;
+}
+
+void EpubReaderActivity::backgroundBuildTick() {
+  RenderLock lock(RenderLock::Mode::Try);
+  if (!lock.ownsLock() || overlay != Overlay::None || !backgroundBuildWanted()) return;
+  if (paginationInputPending() || anyButtonPressed() || pendingManualTurn != 0 || !buildTickHeapGate()) return;
+  const uint32_t loansBefore = renderer.frameBufferLoanCount();
+  const bool built = section->buildSomeMore(BACKGROUND_BUILD_PAGES_PER_TICK, &paginationInputPending);
+  if (renderer.frameBufferLoanCount() != loansBefore) {
+    pageBufferStale = true;
+    requestUpdate();
+  }
+  if (!built) {
+    LOG_ERR("ERS", "Background section build failed");
+    backgroundBuildFailedSpine = currentSpineIndex;
+    nextPageNumber = section->currentPage;
+    section.reset();
+    requestUpdate();
+  } else if (section->isBuildComplete() && applyDeferredReposition()) {
+    requestUpdate();
+  }
+}
+
 bool EpubReaderActivity::backgroundBuildWanted() const {
-  return section && section->isBuilding() && !bleturner::holdsHeap() &&
-         (radioReleasedForBuild.load() || section->isPartial() ||
-          static_cast<int>(section->pageCount) < section->currentPage + BUILD_WINDOW_AHEAD);
+  return section && section->isBuilding() && !bleturner::holdsHeap() && currentSpineIndex != backgroundBuildFailedSpine;
 }
 
 bool EpubReaderActivity::skipLoopDelay() {

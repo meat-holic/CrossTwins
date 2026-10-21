@@ -28,13 +28,20 @@ struct Renderer {
   uint32_t loans = 0;
   uint32_t frameBufferLoanCount() const { return loans; }
 };
+struct MappedInputManager {
+  enum class Button { Back, Confirm, Left, Right, Up, Down, Power };
+  bool held = false;
+  bool isPressed(Button) const { return held; }
+};
+bool rawButtonHeld = false;
+bool paginationInputPending() { return rawButtonHeld; }
 struct Section {
   bool building = true, partial = false, succeed = true;
   Renderer* renderer = nullptr;
   int pageCount = 0, currentPage = 0;
   bool isBuilding() const { EXPECT_TRUE(ownsRenderMutex); return building; }
   bool isPartial() const { EXPECT_TRUE(ownsRenderMutex); return partial; }
-  bool buildSomeMore(int) { EXPECT_TRUE(ownsRenderMutex); ++pageCount; if (renderer) ++renderer->loans; return succeed; }
+  bool buildSomeMore(int, bool (*)() = nullptr) { EXPECT_TRUE(ownsRenderMutex); ++pageCount; if (renderer) ++renderer->loans; return succeed; }
   bool isBuildComplete() const { return !building; }
 };
 #define LOG_ERR(...) ((void)0)
@@ -44,21 +51,24 @@ class EpubReaderActivity {
   enum class Overlay { None, Toolbar };
   Overlay overlay = Overlay::None;
   Renderer renderer;
+  MappedInputManager mappedInput;
   std::atomic<bool> pageBufferStale{false};
   std::unique_ptr<Section> section;
   bool buildHeapPaused = false, heapAllowed = true;
   std::atomic<bool> radioReleasedForBuild{false};
-  int updates = 0;
+  int updates = 0, currentSpineIndex = 1, backgroundBuildFailedSpine = -1;
+  int pendingManualTurn = 0, nextPageNumber = 0;
   static constexpr int BUILD_WINDOW_AHEAD = 3, BACKGROUND_BUILD_PAGES_PER_TICK = 2;
   bool backgroundBuildWanted() const;
   bool skipLoopDelay();
+  bool anyButtonPressed() const;
+  void backgroundBuildTick();
   bool buildTickHeapGate() { return heapAllowed; }
   bool applyDeferredReposition() { return false; }
   void requestUpdate() { ++updates; }
-  void tick() {
-@BUILD_TICK@
-  }
+  void tick() { backgroundBuildTick(); }
 };
+@BUILD_TICK@
 @BUILD_HINT@
 int lastDelay = 0;
 void delay(int ms) { lastDelay = ms; }
@@ -177,4 +187,44 @@ TEST(ReaderContention, RadioAndChapterBuildNeverShareHeap) {
   reader.radioReleasedForBuild = true;
   reader.tick();
   EXPECT_EQ(reader.section->pageCount, 101);
+}
+TEST(ReaderContention, EveryInputBoundaryDefersIdleWork) {
+  EpubReaderActivity reader;
+  reader.section = std::make_unique<Section>();
+  rawButtonHeld = true;
+  reader.tick();
+  EXPECT_EQ(reader.section->pageCount, 0);
+  rawButtonHeld = false;
+  reader.mappedInput.held = true;
+  reader.tick();
+  EXPECT_EQ(reader.section->pageCount, 0);
+  reader.mappedInput.held = false;
+  reader.pendingManualTurn = 1;
+  reader.tick();
+  EXPECT_EQ(reader.section->pageCount, 0);
+  reader.pendingManualTurn = 0;
+  reader.tick();
+  EXPECT_EQ(reader.section->pageCount, 1);
+}
+TEST(ReaderContention, IdleWorkContinuesPastLookAheadAndFailureKeepsThePage) {
+  EpubReaderActivity reader;
+  reader.section = std::make_unique<Section>();
+  reader.section->pageCount = 1200;
+  reader.section->currentPage = 700;
+  reader.tick();
+  EXPECT_EQ(reader.section->pageCount, 1201);
+  reader.section->succeed = false;
+  reader.tick();
+  EXPECT_FALSE(reader.section);
+  EXPECT_EQ(reader.nextPageNumber, 700);
+  EXPECT_EQ(reader.backgroundBuildFailedSpine, 1);
+  reader.section = std::make_unique<Section>();
+  reader.tick();
+  EXPECT_EQ(reader.section->pageCount, 0);
+  reader.currentSpineIndex = 2;
+  reader.tick();
+  EXPECT_EQ(reader.section->pageCount, 1);
+  reader.currentSpineIndex = 1;
+  reader.tick();
+  EXPECT_EQ(reader.section->pageCount, 1);
 }

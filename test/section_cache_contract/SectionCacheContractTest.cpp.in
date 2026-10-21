@@ -7,6 +7,7 @@
 #include <array>
 #include <chrono>
 #include <filesystem>
+#include <deque>
 #include <memory>
 #include <optional>
 #include <map>
@@ -19,6 +20,7 @@
 #define LOG_ERR(...) ((void)0)
 #define LOG_DBG(...) ((void)0)
 @VERSIONS@
+struct ChapterHtmlSlimParser { enum class ParseStatus { More, Done, Error }; };
 struct Section {
   std::string filePath;
   HalFile file;
@@ -33,9 +35,24 @@ struct Section {
   struct Parser {
     std::map<std::string, uint16_t> anchors;
     const auto& getAnchors() const { return anchors; }
+    int remaining = 0, steps = 0, errorAtStep = -1;
+    uint16_t* pageCounter = nullptr;
+    ChapterHtmlSlimParser::ParseStatus parseStep() {
+      ++steps;
+      if (steps == errorAtStep) return ChapterHtmlSlimParser::ParseStatus::Error;
+      if (remaining == 0) return ChapterHtmlSlimParser::ParseStatus::Done;
+      --remaining;
+      if (pageCounter) ++*pageCounter;
+      return ChapterHtmlSlimParser::ParseStatus::More;
+    }
+    uint32_t parseBytesConsumed() const { return steps * 1024; }
   };
-  struct Build { std::vector<Entry> lut; std::unique_ptr<Parser> parser; };
+  struct Build { std::@LUT_CONTAINER_KIND@<Entry> lut; std::unique_ptr<Parser> parser; uint32_t bytesConsumed = 0; };
   std::unique_ptr<Build> build_;
+  bool buildComplete_ = false;
+  bool finalizeBuild() { buildComplete_ = true; build_.reset(); return true; }
+  void abandonBuild() { build_.reset(); }
+  bool buildSomeMore(int, bool (*)() = nullptr);
   std::string binTmpPath() const { return filePath + ".part"; }
   bool writeSectionFileHeader(const ReaderRenderSpec&);
   bool loadSectionFile(const ReaderRenderSpec&);
@@ -50,6 +67,73 @@ struct Section {
 @COUNT@
 @VISIBLE@
 @COMMIT@
+@BUILD_MORE@
+
+static size_t largestPaginationAllocation = 0;
+template <class T> struct PaginationAllocator {
+  using value_type = T;
+  PaginationAllocator() = default;
+  template <class U> PaginationAllocator(const PaginationAllocator<U>&) {}
+  T* allocate(size_t n) {
+    largestPaginationAllocation = std::max(largestPaginationAllocation, n * sizeof(T));
+    return std::allocator<T>{}.allocate(n);
+  }
+  void deallocate(T* ptr, size_t n) { std::allocator<T>{}.deallocate(ptr, n); }
+  template <class U> bool operator==(const PaginationAllocator<U>&) const { return true; }
+};
+TEST(PaginationStorage, PageTableBeyond1024AvoidsThe24KiBContiguousRequest) {
+  largestPaginationAllocation = 0;
+  std::@LUT_CONTAINER_KIND@<Section::Entry, PaginationAllocator<Section::Entry>> pages;
+  for (unsigned i = 0; i < 2049; ++i) pages.push_back({i * 16, static_cast<uint16_t>(i), 0, i * 8});
+  ASSERT_EQ(pages.size(), 2049U);
+  for (unsigned i : {0U, 1023U, 1024U, 2048U}) EXPECT_EQ(pages[i].visibleTextOffset, i * 8);
+  EXPECT_LT(largestPaginationAllocation, 24U * 1024U);
+}
+TEST(PaginationStorage, AnchorTableAt1024AvoidsLargeContiguousGrowth) {
+  largestPaginationAllocation = 0;
+  using Anchor = std::pair<std::string, uint16_t>;
+  std::@ANCHOR_CONTAINER_KIND@<Anchor, PaginationAllocator<Anchor>> anchors;
+  for (unsigned i = 0; i < 1024; ++i) anchors.emplace_back("anchor" + std::to_string(i), static_cast<uint16_t>(i));
+  EXPECT_EQ(anchors[512].first, "anchor512");
+  EXPECT_EQ(anchors.back().second, 1023);
+  EXPECT_LT(largestPaginationAllocation, 24U * 1024U);
+}
+static bool stopPaginationNow = false;
+static bool shouldStopPagination() { return stopPaginationNow; }
+TEST(PaginationStorage, ParseStepYieldResumesWithoutLosingThePageBudget) {
+  Section section;
+  section.pageCount = 2000;  // An existing partial watermark must not expand a small step.
+  section.build_ = std::make_unique<Section::Build>();
+  section.build_->parser = std::make_unique<Section::Parser>();
+  auto* parser = section.build_->parser.get();
+  parser->remaining = 1153;
+  parser->pageCounter = &section.builtPageCount_;
+  stopPaginationNow = true;
+  ASSERT_TRUE(section.buildSomeMore(2, shouldStopPagination));
+  EXPECT_EQ(parser->steps, 1);
+  EXPECT_EQ(section.builtPageCount_, 1);
+  EXPECT_EQ(section.build_->bytesConsumed, 1024U);
+  stopPaginationNow = false;
+  ASSERT_TRUE(section.buildSomeMore(2, shouldStopPagination));
+  EXPECT_EQ(section.builtPageCount_, 3);
+  unsigned ticks = 0;
+  while (section.build_ && ticks++ < 1000) ASSERT_TRUE(section.buildSomeMore(2, shouldStopPagination));
+  EXPECT_FALSE(section.build_);
+  EXPECT_TRUE(section.buildComplete_);
+  EXPECT_EQ(section.builtPageCount_, 1153);
+}
+TEST(PaginationStorage, ParseErrorAbandonsTheBuildAndCanRetry) {
+  Section section;
+  section.pageCount = 42;
+  for (int attempt = 0; attempt < 2; ++attempt) {
+    section.build_ = std::make_unique<Section::Build>();
+    section.build_->parser = std::make_unique<Section::Parser>();
+    section.build_->parser->errorAtStep = 1;
+    EXPECT_FALSE(section.buildSomeMore(2, shouldStopPagination));
+    EXPECT_FALSE(section.build_);
+    EXPECT_EQ(section.pageCount, 42);
+  }
+}
 
 class SectionCacheContract : public testing::Test {
  protected:

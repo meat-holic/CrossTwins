@@ -16,6 +16,20 @@ endif()
 string(SUBSTRING "${SECTION_SOURCE}" ${VISIBLE_START} -1 VISIBLE)
 production_slice(COMMIT lib/Epub/Epub/Section.cpp
   "bool Section::commitBuildFile" "bool Section::finalizeBuild")
+production_slice(BUILD_MORE lib/Epub/Epub/Section.cpp
+  "bool Section::buildSomeMore(" "bool Section::hasHtmlCache()")
+file(READ "${REPO_ROOT}/lib/Epub/Epub/Section.h" SECTION_HEADER)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+  "${REPO_ROOT}/lib/Epub/Epub/Section.h"
+  "${REPO_ROOT}/lib/Epub/Epub/parsers/ChapterHtmlSlimParser.h")
+string(REGEX MATCH "std::(vector|deque)<PageLutEntry>" LUT_DECL "${SECTION_HEADER}")
+set(LUT_CONTAINER_KIND "${CMAKE_MATCH_1}")
+file(READ "${REPO_ROOT}/lib/Epub/Epub/parsers/ChapterHtmlSlimParser.h" PARSER_HEADER)
+string(REGEX MATCH "std::(vector|deque)<std::pair<std::string, uint16_t>> anchorData" ANCHOR_DECL "${PARSER_HEADER}")
+set(ANCHOR_CONTAINER_KIND "${CMAKE_MATCH_1}")
+if(NOT LUT_CONTAINER_KIND OR NOT ANCHOR_CONTAINER_KIND)
+  message(FATAL_ERROR "Unknown pagination storage declaration")
+endif()
 configure_file(SectionCacheContractTest.cpp.in SectionCacheContractTest.cpp @ONLY)
 add_executable(SectionCacheContractTest "${CMAKE_CURRENT_BINARY_DIR}/SectionCacheContractTest.cpp")
 target_include_directories(SectionCacheContractTest PRIVATE

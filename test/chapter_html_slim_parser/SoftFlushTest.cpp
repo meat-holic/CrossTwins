@@ -2,7 +2,9 @@
 #include <GfxRenderer.h>
 #include <gtest/gtest.h>
 
+#include <chrono>
 #include <filesystem>
+#include <fstream>
 #include <memory>
 #include <string>
 #include <tuple>
@@ -224,5 +226,88 @@ TEST(EpubBlockBoundary, PendingWordKeepsItsOriginalParagraphAndStyle) {
       EXPECT_EQ(first.getBlock()->wordStyle(0), EpdFontFamily::REGULAR);
     }
   }
+}
+TEST(EpubPagination, LongKoreanChapterKeepsAllWordsAndAnchorBoundary) {
+  Fixture f;
+  f.parser.currentTextBlock.reset();
+  f.parser.viewportWidth = 200;
+  f.parser.viewportHeight = 32;
+  f.parser.extraParagraphSpacing = false;
+  size_t pages = 0, words = 0;
+  uint64_t fingerprint = 1469598103934665603ULL;
+  const auto hash = [&](uint64_t value) {
+    for (int byte = 0; byte < 8; ++byte) {
+      fingerprint ^= static_cast<uint8_t>(value >> (8 * byte));
+      fingerprint *= 1099511628211ULL;
+    }
+  };
+  auto inspect = [&](std::unique_ptr<Page> page, auto, auto, auto) {
+    ++pages;
+    for (const auto& element : page->elements) {
+      if (element->getTag() != TAG_PageLine) continue;
+      const auto& line = static_cast<const PageLine&>(*element);
+      hash(line.xPos);
+      hash(line.yPos);
+      const auto& block = *line.getBlock();
+      for (uint16_t i = 0; i < block.wordCount(); ++i) {
+        EXPECT_STREQ(block.wordText(i), "한국어");
+        hash(block.wordXpos(i));
+        for (const unsigned char c : std::string(block.wordText(i))) hash(c);
+        ++words;
+      }
+    }
+  };
+  f.parser.completePageFn = inspect;
+  for (int i = 0; i < 3072; ++i) {
+    const auto id = "paragraph-" + std::to_string(i);
+    const XML_Char* attributes[] = {"id", id.c_str(), nullptr};
+    ChapterHtmlSlimParser::startElement(&f.parser, "p", attributes);
+    ChapterHtmlSlimParser::characterData(&f.parser, "한국어", 9);
+    ChapterHtmlSlimParser::endElement(&f.parser, "p");
+  }
+  if (f.parser.currentPage && !f.parser.currentPage->elements.empty())
+    inspect(std::move(f.parser.currentPage), 0, 0, 0);
+  EXPECT_GT(pages, 1024U);
+  EXPECT_EQ(words, 3072U);
+  ASSERT_EQ(f.parser.getAnchors().size(), 1024U);
+  for (const auto& [id, page] : f.parser.getAnchors()) EXPECT_LT(page, pages) << id;
+  std::printf("PAGINATION_GOLDEN pages=%zu words=%zu hash=%llu\n", pages, words,
+              static_cast<unsigned long long>(fingerprint));
+
+  // Exercise the real streaming XML parser as well as the direct layout callbacks.
+  const auto path =
+      std::filesystem::temp_directory_path() /
+      ("ct12-long-korean-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".html");
+  ASSERT_FALSE(std::filesystem::exists(path));
+  struct Cleanup {
+    std::filesystem::path path;
+    ~Cleanup() {
+      std::error_code ec;
+      std::filesystem::remove(path, ec);
+    }
+  } cleanup{path};
+  {
+    std::ofstream output(path, std::ios::binary);
+    ASSERT_TRUE(output);
+    output << "<html><body>";
+    for (int i = 0; i < 3072; ++i) output << "<p id='paragraph-" << i << "'>한국어</p>";
+    output << "</body></html>";
+    output.close();
+    ASSERT_TRUE(output);
+  }
+  Fixture streamed;
+  streamed.filepath = path.string();
+  streamed.parser.viewportWidth = 200;
+  streamed.parser.viewportHeight = 32;
+  streamed.parser.extraParagraphSpacing = false;
+  streamed.parser.completePageFn = inspect;
+  pages = words = 0;
+  fingerprint = 1469598103934665603ULL;
+  ASSERT_TRUE(streamed.parser.parseAndBuildPages());
+  EXPECT_GT(pages, 1024U);
+  EXPECT_EQ(words, 3072U);
+  EXPECT_EQ(streamed.parser.getAnchors().size(), 1024U);
+  std::printf("PAGINATION_STREAMED pages=%zu words=%zu hash=%llu\n", pages, words,
+              static_cast<unsigned long long>(fingerprint));
 }
 }  // namespace

@@ -123,6 +123,9 @@ class EpubReaderActivity final : public ReaderActivity {
   static constexpr size_t BACKGROUND_BUILD_MIN_MAX_ALLOC = 16 * 1024;
   // Requires the render lock; heap admission is checked separately by the build tick.
   bool backgroundBuildWanted() const;
+  void backgroundBuildTick();
+  bool anyButtonPressed() const;
+  int backgroundBuildFailedSpine = -1;
   bool buildTickHeapGate();
   bool buildHeapPaused = false;
   // Bluetooth page turner: every chapter build stops the radio until the chapter is built and its
@@ -135,7 +138,6 @@ class EpubReaderActivity final : public ReaderActivity {
   // "Connecting Bluetooth…" or "Bluetooth failed" in place of the status bar title.
   mutable LinkNoteTitle linkNoteTitle;
   static constexpr size_t RENDER_MIN_FREE_HEAP = 24 * 1024;
-  static constexpr int BUILD_WINDOW_AHEAD = 5;
   static constexpr int PARTIAL_REBUILD_START_MARGIN = 15;
   static constexpr int BUILD_POPUP_PAGE_THRESHOLD = 20;
   static constexpr size_t BUILD_POPUP_BYTE_THRESHOLD = 96 * 1024;
