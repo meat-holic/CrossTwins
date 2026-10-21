@@ -9,6 +9,7 @@
 #include <vector>
 #include "network/OtaUpdater.h"
 #include "ReleaseJsonParser.h"
+#include "network/OtaCaCerts.h"
 #define CROSSPOINT_VERSION "1.6.5-ct.7"
 #define LOG_INF(...) ((void)0)
 #define LOG_DBG(...) ((void)0)
@@ -48,6 +49,9 @@ struct HttpDownloader {
   static inline std::vector<size_t> chunks;
   static inline std::vector<std::string> urls;
   static inline bool failRelease=false,failImage=false;
+  static bool fetchUrlVerified(const std::string& url,const std::function<bool(const uint8_t*,size_t)>& sink,const char* ca) {
+    EXPECT_EQ(ca,ota_ca::kGithubOtaCaAnchors);return fetchUrl(url,sink);
+  }
   static int lastStatus(){return failRelease || failImage ? 0 : 200;}
   static bool fetchUrl(const std::string& url,const std::function<bool(const uint8_t*,size_t)>& sink) {
     urls.push_back(url);

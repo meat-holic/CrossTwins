@@ -1,5 +1,7 @@
 #include "OtaUpdater.h"
 
+#include "OtaCaCerts.h"
+
 // clang-format off
 // HttpDownloader.h pulls Arduino/SdFat, whose macros collide with lwip's
 // ip4_addr.h unless seen first. Pin this order; clang-format would otherwise sort
@@ -50,18 +52,21 @@ OtaUpdater::OtaUpdaterError OtaUpdater::checkForUpdate() {
     releases->beginPage();
     size_t received = 0;
     bool invalidResponse = false;
-    const bool ok = HttpDownloader::fetchUrl(url, [&](const uint8_t* data, size_t len) {
-      if (len > MAX_RELEASE_PAGE_BYTES - received) {
-        invalidResponse = true;
-        return false;
-      }
-      received += len;
-      if (!releases->feed(reinterpret_cast<const char*>(data), len)) {
-        invalidResponse = true;
-        return false;
-      }
-      return true;
-    });
+    const bool ok = HttpDownloader::fetchUrlVerified(
+        url,
+        [&](const uint8_t* data, size_t len) {
+          if (len > MAX_RELEASE_PAGE_BYTES - received) {
+            invalidResponse = true;
+            return false;
+          }
+          received += len;
+          if (!releases->feed(reinterpret_cast<const char*>(data), len)) {
+            invalidResponse = true;
+            return false;
+          }
+          return true;
+        },
+        ota_ca::kGithubOtaCaAnchors);
     if (invalidResponse || (ok && !releases->finishPage())) {
       LOG_ERR("OTA", "Invalid or oversized release response on page %u", page);
       return JSON_PARSE_ERROR;
@@ -160,59 +165,62 @@ OtaUpdater::OtaUpdaterError OtaUpdater::installUpdate(ProgressCallback onProgres
   // the inactive OTA slot, but esp_ota_abort() below means it never becomes
   // the boot target.
   board_tag::Scanner tagScanner;
-  const bool fetchOk = HttpDownloader::fetchUrl(otaUrl, [&](const uint8_t* data, size_t len) {
-    if (len > otaSize - received) {
-      sizeMismatch = true;
-      return false;
-    }
-    received += len;
-    const size_t headerTake = hdrLen < sizeof(hdr) ? std::min(len, sizeof(hdr) - hdrLen) : 0;
-    if (hdrLen < sizeof(hdr)) {
-      const size_t take = std::min(len, sizeof(hdr) - hdrLen);
-      std::memcpy(hdr + hdrLen, data, take);
-      hdrLen += take;
-      if (hdrLen == sizeof(hdr)) {
-        uint16_t imageChip;
-        std::memcpy(&imageChip, hdr + 12, sizeof(imageChip));
-        const uint16_t deviceChip = firmware_flash::runningPartitionChipId();
-        if (hdr[0] != 0xE9 || deviceChip == 0xFFFF || imageChip != deviceChip) {
-          LOG_ERR("OTA", "wrong chip: image=0x%04X device=0x%04X", imageChip, deviceChip);
-          wrongChip = true;
+  const bool fetchOk = HttpDownloader::fetchUrlVerified(
+      otaUrl,
+      [&](const uint8_t* data, size_t len) {
+        if (len > otaSize - received) {
+          sizeMismatch = true;
+          return false;
+        }
+        received += len;
+        const size_t headerTake = hdrLen < sizeof(hdr) ? std::min(len, sizeof(hdr) - hdrLen) : 0;
+        if (hdrLen < sizeof(hdr)) {
+          const size_t take = std::min(len, sizeof(hdr) - hdrLen);
+          std::memcpy(hdr + hdrLen, data, take);
+          hdrLen += take;
+          if (hdrLen == sizeof(hdr)) {
+            uint16_t imageChip;
+            std::memcpy(&imageChip, hdr + 12, sizeof(imageChip));
+            const uint16_t deviceChip = firmware_flash::runningPartitionChipId();
+            if (hdr[0] != 0xE9 || deviceChip == 0xFFFF || imageChip != deviceChip) {
+              LOG_ERR("OTA", "wrong chip: image=0x%04X device=0x%04X", imageChip, deviceChip);
+              wrongChip = true;
+              return false;  // abort the transfer
+            }
+          }
+        }
+        tagScanner.feed(data, len);
+        if (tagScanner.mismatch()) {
+          LOG_ERR("OTA", "wrong board: image=%s device=%.*s", tagScanner.foundName(),
+                  static_cast<int>(board_tag::boardNameLen()), board_tag::boardName());
           return false;  // abort the transfer
         }
-      }
-    }
-    tagScanner.feed(data, len);
-    if (tagScanner.mismatch()) {
-      LOG_ERR("OTA", "wrong board: image=%s device=%.*s", tagScanner.foundName(),
-              static_cast<int>(board_tag::boardNameLen()), board_tag::boardName());
-      return false;  // abort the transfer
-    }
-    if (hdrLen < sizeof(hdr)) return true;
-    // A split header must be validated before any bytes are written.
-    if (processedSize == 0 && esp_ota_write(otaHandle, hdr, sizeof(hdr)) != ESP_OK) {
-      flashOk = false;
-      return false;
-    }
-    const size_t offset = processedSize == 0 ? headerTake : 0;
-    if (len > offset && esp_ota_write(otaHandle, data + offset, len - offset) != ESP_OK) {
-      flashOk = false;
-      return false;  // abort the transfer
-    }
-    if (processedSize == 0) processedSize = sizeof(hdr);
-    processedSize += len - offset;
-    // Fire the callback only on whole-percent change. Per-chunk updates wake the
-    // render task, whose framebuffer work contends with TLS on the internal arena,
-    // and e-ink can't repaint faster than a percent tick anyway.
-    if (onProgress && totalSize > 0) {
-      const int pct = static_cast<int>(static_cast<uint64_t>(processedSize) * 100 / totalSize);
-      if (pct != lastReportedPct) {
-        lastReportedPct = pct;
-        onProgress(ctx);
-      }
-    }
-    return true;
-  });
+        if (hdrLen < sizeof(hdr)) return true;
+        // A split header must be validated before any bytes are written.
+        if (processedSize == 0 && esp_ota_write(otaHandle, hdr, sizeof(hdr)) != ESP_OK) {
+          flashOk = false;
+          return false;
+        }
+        const size_t offset = processedSize == 0 ? headerTake : 0;
+        if (len > offset && esp_ota_write(otaHandle, data + offset, len - offset) != ESP_OK) {
+          flashOk = false;
+          return false;  // abort the transfer
+        }
+        if (processedSize == 0) processedSize = sizeof(hdr);
+        processedSize += len - offset;
+        // Fire the callback only on whole-percent change. Per-chunk updates wake the
+        // render task, whose framebuffer work contends with TLS on the internal arena,
+        // and e-ink can't repaint faster than a percent tick anyway.
+        if (onProgress && totalSize > 0) {
+          const int pct = static_cast<int>(static_cast<uint64_t>(processedSize) * 100 / totalSize);
+          if (pct != lastReportedPct) {
+            lastReportedPct = pct;
+            onProgress(ctx);
+          }
+        }
+        return true;
+      },
+      ota_ca::kGithubOtaCaAnchors);
 
   /* Return back to default power saving for WiFi in case of failing */
   // powerSave restores the original policy on every return.

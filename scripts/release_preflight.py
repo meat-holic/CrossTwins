@@ -17,7 +17,7 @@ from pathlib import Path
 from release_version import DEVICES, asset_name, firmware_version, resolve_release
 
 REPOSITORY = "meat-holic/CrossTwins"
-SDK_SHA = "7f0f20202baf26cad5fd32862b6fc1387467a741"
+SDK_SHA = "c55241ee07bf86685a0f362098838cfc4ec3c86c"
 PLATFORM = "https://github.com/pioarduino/platform-espressif32/releases/download/55.03.311/platform-espressif32.zip"
 PROFILES = {
     "x3-x4": ("gh_release_rc", 5, "x4"),

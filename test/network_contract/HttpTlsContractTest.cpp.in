@@ -1,0 +1,69 @@
+#include <gtest/gtest.h>
+#include <algorithm>
+#include <cstring>
+#include <functional>
+#include <map>
+#include <string>
+#include <utility>
+#include <vector>
+#include <ResumableFetch.h>
+#define CROSSPOINT_VERSION "test"
+#define LOG_INF(...) ((void)0)
+#define LOG_DBG(...) ((void)0)
+#define LOG_ERR(...) ((void)0)
+struct {unsigned getFreeHeap(){return 100000;}unsigned getMaxAllocHeap(){return 80000;}} ESP;
+struct Stream {virtual ~Stream()=default;virtual size_t write(const uint8_t*,size_t)=0;};
+struct WifiPowerSaveGuard {};
+namespace tlsScript {bool fail=false;int verified=0,insecure=0;std::vector<std::string> roots;}
+// Actual SecureHttpClient and ResumableFetch parse the scripted HTTP bytes.
+// TLS is a transport fake here; the separate SDK test executes actual SecureClient.
+namespace freeink {
+SecureClient::~SecureClient(){stop();}
+void SecureClient::setCACert(const char* p){_rootCA=p;_insecure=false;}
+void SecureClient::setInsecure(){_insecure=true;}
+int SecureClient::connect(IPAddress,uint16_t){return 0;}
+int SecureClient::connect(const char* host,uint16_t port){if(_insecure)++tlsScript::insecure;else{++tlsScript::verified;tlsScript::roots.emplace_back(_rootCA?_rootCA:"");}if(tlsScript::fail)return 0;return _transport.connect(host,port);}
+size_t SecureClient::write(uint8_t b){return _transport.write(b);}
+size_t SecureClient::write(const uint8_t* p,size_t n){return _transport.write(p,n);}
+int SecureClient::available(){return _transport.available();}
+int SecureClient::read(){return _transport.read();}
+int SecureClient::read(uint8_t* p,size_t n){return _transport.read(p,n);}
+int SecureClient::peek(){return _transport.peek();}
+void SecureClient::flush(){}
+void SecureClient::stop(){_transport.stop();}
+uint8_t SecureClient::connected(){return _transport.connected();}
+bool SecureClient::tls13Available(){return true;}
+}
+namespace diskScript {std::map<std::string,std::string> files;bool closeFail=false,shortWrite=false;int opens=0,replaces=0;}
+struct HalFile {
+ std::string path;bool open=false;
+ ~HalFile(){if(open)close();}
+ bool isOpen()const{return open;}
+ bool close(){open=false;return !diskScript::closeFail;}
+ size_t write(const uint8_t* p,size_t n){size_t written=diskScript::shortWrite?n/2:n;diskScript::files[path].append(reinterpret_cast<const char*>(p),written);return written;}
+};
+struct {
+ bool remove(const char* p){diskScript::files.erase(p);return true;}
+ bool openFileForWrite(const char*,const char* p,HalFile& f){++diskScript::opens;f.path=p;f.open=true;diskScript::files[p].clear();return true;}
+ bool replaceFile(const char* from,const char* to){++diskScript::replaces;diskScript::files[to]=diskScript::files[from];diskScript::files.erase(from);return true;}
+} Storage;
+@HTTP_HEADER@
+@HTTP_SOURCE@
+class HttpTlsContract:public ::testing::Test {
+ protected:
+ void SetUp()override{FakeNet::replies().clear();FakeNet::requests().clear();FakeNet::hosts().clear();tlsScript::fail=false;tlsScript::verified=tlsScript::insecure=0;tlsScript::roots.clear();diskScript::files.clear();diskScript::closeFail=diskScript::shortWrite=false;diskScript::opens=diskScript::replaces=0;}
+ std::string body;
+ auto sink(){return [this](const uint8_t* p,size_t n){body.append(reinterpret_cast<const char*>(p),n);return true;};}
+ void ok(){FakeNet::replies().push_back("HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\nabc");}
+};
+TEST_F(HttpTlsContract, VerifiedPreconditionsRefuseBeforeNetwork){for(const char* ca:{static_cast<const char*>(nullptr),""})EXPECT_FALSE(HttpDownloader::fetchUrlVerified("https://api.github.com/f",sink(),ca));EXPECT_FALSE(HttpDownloader::fetchUrlVerified("http://api.github.com/f",sink(),"root-v1"));EXPECT_TRUE(FakeNet::requests().empty());EXPECT_TRUE(body.empty());EXPECT_EQ(HttpDownloader::lastStatus(),0);}
+TEST_F(HttpTlsContract, VerifiedHttpsRedirectReappliesTrust){FakeNet::replies().push_back("HTTP/1.1 302 Found\r\nLocation: https://cdn.example/f\r\nContent-Length: 0\r\n\r\n");ok();ASSERT_TRUE(HttpDownloader::fetchUrlVerified("https://api.github.com/f",sink(),"root-v1"));EXPECT_EQ(body,"abc");EXPECT_EQ(tlsScript::verified,2);EXPECT_EQ(tlsScript::insecure,0);EXPECT_EQ(tlsScript::roots,(std::vector<std::string>{"root-v1","root-v1"}));}
+TEST_F(HttpTlsContract, VerifiedDowngradeStopsBeforeSecondConnection){FakeNet::replies().push_back("HTTP/1.1 302 Found\r\nLocation: http://cdn.example/f\r\nContent-Length: 0\r\n\r\n");ok();EXPECT_FALSE(HttpDownloader::fetchUrlVerified("https://api.github.com/f",sink(),"root-v1"));EXPECT_EQ(FakeNet::hosts().size(),1U);EXPECT_TRUE(body.empty());EXPECT_EQ(tlsScript::insecure,0);}
+TEST_F(HttpTlsContract, RangeRetryAndAnchorReplacementKeepVerifiedPolicy){FakeNet::replies().push_back("HTTP/1.1 200 OK\r\nContent-Length: 6\r\n\r\nabc");FakeNet::replies().push_back("HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 3-5/6\r\nContent-Length: 3\r\n\r\ndef");ASSERT_TRUE(HttpDownloader::fetchUrlVerified("https://api.github.com/f",sink(),"root-v1"));EXPECT_EQ(body,"abcdef");ASSERT_EQ(FakeNet::requests().size(),2U);EXPECT_NE(FakeNet::requests()[1].find("Range: bytes=3-"),std::string::npos);ok();EXPECT_TRUE(HttpDownloader::fetchUrlVerified("https://api.github.com/g",sink(),"root-v2"));EXPECT_EQ(tlsScript::roots.back(),"root-v2");EXPECT_EQ(tlsScript::insecure,0);}
+TEST_F(HttpTlsContract, TlsFailureNeverBecomesSuccessOrUnverified){tlsScript::fail=true;ok();EXPECT_FALSE(HttpDownloader::fetchUrlVerified("https://api.github.com/f",sink(),"root-v1"));EXPECT_TRUE(body.empty());EXPECT_EQ(tlsScript::insecure,0);EXPECT_EQ(HttpDownloader::lastStatus(),0);}
+TEST_F(HttpTlsContract, LegacyOpdsAuthAndHttpBehaviorRemain){FakeNet::replies().push_back("HTTP/1.1 401 Unauthorized\r\nContent-Length: 3\r\n\r\nauth" /* deliberately longer than declared: only 3 are consumed */);HttpDownloader::FetchOptions options;options.username="test-user";options.password="test-pass";options.captureErrorBody=true;int status=0;options.statusOut=&status;EXPECT_FALSE(HttpDownloader::fetchUrl("http://local.example/f",sink(),options));EXPECT_EQ(status,401);EXPECT_EQ(body,"aut");ASSERT_EQ(FakeNet::requests().size(),1U);EXPECT_NE(FakeNet::requests()[0].find("Authorization: Basic "),std::string::npos);ok();EXPECT_TRUE(HttpDownloader::fetchUrl("https://local.example/g",sink()));EXPECT_EQ(tlsScript::insecure,1);}
+TEST_F(HttpTlsContract, FailedGetClosePreservesExistingDestination){diskScript::files["book.epub"]="old";diskScript::closeFail=true;ok();EXPECT_EQ(HttpDownloader::downloadToFile("http://local/f","book.epub"),HttpDownloader::FILE_ERROR);EXPECT_EQ(diskScript::files["book.epub"],"old");EXPECT_FALSE(diskScript::files.contains("book.epub.part"));EXPECT_EQ(diskScript::replaces,0);}
+TEST_F(HttpTlsContract, FailedPostClosePreservesExistingDestination){diskScript::files["book.epub"]="old";diskScript::closeFail=true;ok();EXPECT_EQ(HttpDownloader::postToFile("http://local/f","body","text/plain","book.epub"),HttpDownloader::FILE_ERROR);EXPECT_EQ(diskScript::files["book.epub"],"old");EXPECT_FALSE(diskScript::files.contains("book.epub.part"));EXPECT_EQ(diskScript::replaces,0);}
+TEST_F(HttpTlsContract, FailedRewindCloseDoesNotReopenOrPublish){diskScript::files["book.epub"]="old";diskScript::closeFail=true;FakeNet::replies().push_back("HTTP/1.1 200 OK\r\nContent-Length: 6\r\n\r\nabc");ok();EXPECT_EQ(HttpDownloader::downloadToFile("http://local/f","book.epub"),HttpDownloader::FILE_ERROR);EXPECT_EQ(diskScript::opens,1);EXPECT_EQ(diskScript::replaces,0);EXPECT_EQ(diskScript::files["book.epub"],"old");}
+TEST_F(HttpTlsContract, ShortWriteAndIncompleteTransferNeverPublish){for(bool shortWrite:{false,true}){diskScript::files["book.epub"]="old";diskScript::shortWrite=shortWrite;FakeNet::replies().push_back("HTTP/1.1 200 OK\r\nContent-Length: 6\r\n\r\nabc");EXPECT_NE(HttpDownloader::downloadToFile("http://local/f","book.epub"),HttpDownloader::OK);EXPECT_EQ(diskScript::files["book.epub"],"old");EXPECT_EQ(diskScript::replaces,0);EXPECT_FALSE(diskScript::files.contains("book.epub.part"));}}
+TEST_F(HttpTlsContract, SuccessfulClosePublishesDownloadedContent){ok();EXPECT_EQ(HttpDownloader::downloadToFile("http://local/f","book.epub"),HttpDownloader::OK);EXPECT_EQ(diskScript::files["book.epub"],"abc");EXPECT_EQ(diskScript::replaces,1);EXPECT_FALSE(diskScript::files.contains("book.epub.part"));}

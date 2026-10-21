@@ -9,8 +9,9 @@
 
 /**
  * HTTP client utility for fetching content and downloading files. Built on
- * esp_http_client: https is verified against the CA bundle, plain http is
- * used for local servers (transport is chosen from the URL scheme).
+ * SecureHttpClient. fetchUrlVerified authenticates OTA peers with explicit
+ * roots and HTTPS-only redirects. Legacy OPDS/self-hosted fetches retain their
+ * existing explicit-insecure transport policy; they are not authenticated TLS.
  */
 class HttpDownloader {
  public:
@@ -63,6 +64,9 @@ class HttpDownloader {
    */
   static bool fetchUrl(const std::string& url, const DataCallback& onData, const std::string& username = "",
                        const std::string& password = "", const std::vector<Header>& headers = {});
+
+  // OTA-only strict path: all hops/retries require HTTPS, a valid chain and hostname.
+  static bool fetchUrlVerified(const std::string& url, const DataCallback& onData, const char* caPem);
 
   /**
    * Authentication and response inspection options for fetchUrl/postForm.

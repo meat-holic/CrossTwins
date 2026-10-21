@@ -1,0 +1,97 @@
+#include <gtest/gtest.h>
+#include <algorithm>
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
+#include <functional>
+#include <string>
+#include <utility>
+#include <vector>
+#define FREEINK_NET_WOLFSSL 1
+struct IPAddress { uint8_t operator[](int) const { return 0; } };
+struct Client {
+  virtual ~Client() = default;
+  virtual int connect(IPAddress,uint16_t)=0;
+  virtual int connect(const char*,uint16_t)=0;
+  virtual size_t write(uint8_t)=0;
+  virtual size_t write(const uint8_t*,size_t)=0;
+  virtual int available()=0;
+  virtual int read()=0;
+  virtual int read(uint8_t*,size_t)=0;
+  virtual int peek()=0;
+  virtual void flush()=0;
+  virtual void stop()=0;
+  virtual uint8_t connected()=0;
+  virtual operator bool()=0;
+  unsigned long getTimeout(){return 100;}
+};
+struct WiFiClient {
+  bool open=false;
+  int connect(const char*,uint16_t){open=true;return 1;}
+  void setConnectionTimeout(unsigned long){}
+  int write(const uint8_t*,int n){return n;}
+  int read(uint8_t*,int){return 0;}
+  int available(){return 0;}
+  bool connected(){return open;}
+  void stop(){open=false;}
+};
+struct { explicit operator bool()const{return false;} template<class...T>void printf(T...){} void println(const char*){} } Serial;
+struct { unsigned getFreeHeap(){return 60000;}unsigned getMaxAllocHeap(){return 40000;} } ESP;
+uint32_t fakeTime=0;
+uint32_t millis(){return fakeTime;}
+void delay(int n){fakeTime+=n;}
+struct WOLFSSL_METHOD{} method;
+struct WOLFSSL_CTX{} ctx;
+struct WOLFSSL{} ssl;
+constexpr int WOLFSSL_SUCCESS=1,WOLFSSL_VERIFY_NONE=0,WOLFSSL_VERIFY_PEER=1,WOLFSSL_FILETYPE_PEM=1;
+constexpr int WOLFSSL_SNI_HOST_NAME=0,WOLFSSL_ERROR_WANT_READ=2,WOLFSSL_ERROR_WANT_WRITE=3;
+constexpr int WOLFSSL_CBIO_ERR_CONN_CLOSE=-5,WOLFSSL_CBIO_ERR_WANT_READ=-2,WOLFSSL_CBIO_ERR_WANT_WRITE=-3;
+constexpr int WOLFSSL_ERROR_ZERO_RETURN=6;
+namespace injected {
+bool ctxFail=false,sslFail=false,nameFail=false,badChain=false,expired=false;
+int mode=-1,loaded=0,named=0,handshakes=0,liveCtx=0,liveSsl=0,transportFailures=0;
+std::string domain,expectedHost="api.github.com",root;
+std::vector<int> modes;
+void reset(){ctxFail=sslFail=nameFail=badChain=expired=false;mode=-1;loaded=named=handshakes=liveCtx=liveSsl=transportFailures=0;domain.clear();root.clear();modes.clear();fakeTime=0;}
+}
+WOLFSSL_METHOD* wolfSSLv23_client_method(){return &method;}
+WOLFSSL_METHOD* wolfTLSv1_2_client_method(){return &method;}
+WOLFSSL_CTX* wolfSSL_CTX_new(WOLFSSL_METHOD*){if(injected::ctxFail)return nullptr;++injected::liveCtx;return &ctx;}
+void wolfSSL_CTX_free(WOLFSSL_CTX*){--injected::liveCtx;}
+void wolfSSL_CTX_set_verify(WOLFSSL_CTX*,int mode,void*){injected::mode=mode;injected::modes.push_back(mode);}
+int wolfSSL_CTX_load_verify_buffer(WOLFSSL_CTX*,const unsigned char* p,size_t n,int){++injected::loaded;injected::root.assign(reinterpret_cast<const char*>(p),n);return injected::root=="malformed"?0:1;}
+void wolfSSL_SetIORecv(WOLFSSL_CTX*,int(*)(WOLFSSL*,char*,int,void*)){}
+void wolfSSL_SetIOSend(WOLFSSL_CTX*,int(*)(WOLFSSL*,char*,int,void*)){}
+WOLFSSL* wolfSSL_new(WOLFSSL_CTX*){if(injected::sslFail)return nullptr;++injected::liveSsl;return &ssl;}
+void wolfSSL_free(WOLFSSL*){--injected::liveSsl;}
+void wolfSSL_SetIOReadCtx(WOLFSSL*,void*){}
+void wolfSSL_SetIOWriteCtx(WOLFSSL*,void*){}
+int wolfSSL_UseSNI(WOLFSSL*,int,const char*,size_t){return 1;}
+int wolfSSL_check_domain_name(WOLFSSL*,const char* p){++injected::named;if(injected::nameFail)return 0;injected::domain=p;return 1;}
+// Injected verifier outcomes exercise SDK propagation, not certificate cryptography.
+int wolfSSL_connect(WOLFSSL*){++injected::handshakes;if(injected::transportFailures-->0)return 0;if(injected::mode==WOLFSSL_VERIFY_PEER&&(injected::badChain||injected::expired||injected::domain!=injected::expectedHost))return 0;return 1;}
+int wolfSSL_get_error(WOLFSSL*,int){return -100;}
+const char* wolfSSL_get_version(WOLFSSL*){return "fake";}
+const char* wolfSSL_get_cipher(WOLFSSL*){return "fake";}
+int wolfSSL_write(WOLFSSL*,const uint8_t*,size_t n){return static_cast<int>(n);}
+int wolfSSL_read(WOLFSSL*,uint8_t*,size_t){return 0;}
+int wolfSSL_pending(WOLFSSL*){return 0;}
+@TLS_HEADER@
+@TLS_SOURCE@
+class SecureTlsContract:public ::testing::Test {
+ protected:
+ void SetUp()override{injected::reset();}
+ void TearDown()override{EXPECT_EQ(injected::liveCtx,0);EXPECT_EQ(injected::liveSsl,0);}
+};
+#if defined(NO_CERTS)
+TEST_F(SecureTlsContract, UnsupportedCertificatesFailClosedAndLegacyIsExplicit){freeink::SecureClient c;c.setCACert("root-v1");EXPECT_EQ(c.connect("api.github.com",443),0);EXPECT_EQ(injected::handshakes,0);c.setInsecure();EXPECT_EQ(c.connect("api.github.com",443),1);}
+#else
+TEST_F(SecureTlsContract, StrictConnectionRequiresCaAndPeerHostname){freeink::SecureClient c;c.setCACert("root-v1");ASSERT_EQ(c.connect("api.github.com",443),1);EXPECT_EQ(injected::mode,WOLFSSL_VERIFY_PEER);EXPECT_EQ(injected::domain,"api.github.com");EXPECT_EQ(injected::loaded,1);}
+TEST_F(SecureTlsContract, MissingOrMalformedCaNeverHandshakes){for(const char* ca:{static_cast<const char*>(nullptr),"","malformed"}){freeink::SecureClient c;c.setCACert(ca);EXPECT_EQ(c.connect("api.github.com",443),0);}EXPECT_EQ(injected::handshakes,0);}
+TEST_F(SecureTlsContract, CertificateExpiryChainAndHostnameFailuresNeverDowngrade){for(int failure=0;failure<3;++failure){injected::reset();injected::expired=failure==0;injected::badChain=failure==1;injected::expectedHost=failure==2?"other.example":"api.github.com";freeink::SecureClient c;c.setCACert("root-v1");EXPECT_EQ(c.connect("api.github.com",443),0);EXPECT_TRUE(std::all_of(injected::modes.begin(),injected::modes.end(),[](int m){return m==WOLFSSL_VERIFY_PEER;}));}injected::expectedHost="api.github.com";}
+TEST_F(SecureTlsContract, AllocationFailuresCleanAllCreatedResources){for(int failure=0;failure<3;++failure){injected::reset();injected::ctxFail=failure==0;injected::sslFail=failure==1;injected::nameFail=failure==2;freeink::SecureClient c;c.setCACert("root-v1");EXPECT_EQ(c.connect("api.github.com",443),0);EXPECT_EQ(injected::liveCtx,0);EXPECT_EQ(injected::liveSsl,0);}}
+TEST_F(SecureTlsContract, SetCaReenablesVerificationAndReplacement){freeink::SecureClient c;c.setInsecure();c.setCACert("root-v1");ASSERT_EQ(c.connect("api.github.com",443),1);EXPECT_EQ(injected::mode,WOLFSSL_VERIFY_PEER);c.stop();c.setCACert("root-v2");ASSERT_EQ(c.connect("api.github.com",443),1);EXPECT_EQ(injected::root,"root-v2");}
+TEST_F(SecureTlsContract, ProtocolRetryRetainsTrustAndHostname){injected::transportFailures=1;freeink::SecureClient c;c.setCACert("root-v1");EXPECT_EQ(c.connect("api.github.com",443),1);EXPECT_EQ(injected::handshakes,2);EXPECT_EQ(injected::loaded,2);EXPECT_EQ(injected::named,2);}
+TEST_F(SecureTlsContract, LegacyExplicitInsecureAndAbortRemainAvailable){freeink::SecureClient c;c.setInsecure();injected::expired=true;ASSERT_EQ(c.connect("api.github.com",443),1);EXPECT_EQ(injected::mode,WOLFSSL_VERIFY_NONE);c.stop();c.setAbortCallback([]{return true;});EXPECT_EQ(c.connect("api.github.com",443),0);EXPECT_TRUE(c.aborted());}
+
+#endif

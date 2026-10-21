@@ -18,6 +18,21 @@ OVERRIDES = f"""
    heap, and TLS cert verification allocates dozens at once. */
 #undef FP_MAX_BITS
 #define FP_MAX_BITS 8192
+/* CrossPoint PR #3298: verified public chains need cross-sign alternatives,
+   SHA-384/512 and bounded P-384 single-precision verification. options.h is
+   skipped by the build, so these features must be explicit here. */
+#ifndef WOLFSSL_ALT_CERT_CHAINS
+#define WOLFSSL_ALT_CERT_CHAINS
+#endif
+#ifndef WOLFSSL_SHA384
+#define WOLFSSL_SHA384
+#endif
+#ifndef WOLFSSL_SHA512
+#define WOLFSSL_SHA512
+#endif
+#ifndef WOLFSSL_SP_384
+#define WOLFSSL_SP_384
+#endif
 """
 
 

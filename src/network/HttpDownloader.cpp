@@ -24,9 +24,12 @@ constexpr int MAX_REDIRECTS = 5;
 // must not balloon the heap.
 constexpr size_t MAX_RESPONSE_BYTES = 4096;
 
-void applyCommonClientSetup(freeink::SecureHttpClient& http) {
+void applyCommonClientSetup(freeink::SecureHttpClient& http, const char* caPem = nullptr) {
   http.setTimeout(HTTP_TIMEOUT_MS);
-  http.setInsecure();
+  if (caPem)
+    http.setCACert(caPem);
+  else
+    http.setInsecure();
   // setUserAgent replaces SecureHttpClient's built-in UA; addHeader would
   // append a second User-Agent header, which strict servers reject (aiohttp
   // answers 400 "Duplicate 'User-Agent' header found").
@@ -46,16 +49,18 @@ HttpDownloader::DownloadError runGetSecure(const std::string& url, const std::st
                                            const std::string& password,
                                            const std::vector<HttpDownloader::Header>& headers,
                                            const freeink::FetchSink& sink, const bool* cancelFlag = nullptr,
-                                           size_t* bytesOut = nullptr, const bool downgradeRedirectsToHttp = false) {
+                                           size_t* bytesOut = nullptr, const bool downgradeRedirectsToHttp = false,
+                                           const char* caPem = nullptr) {
   WifiPowerSaveGuard psGuard;
   freeink::FetchOptions options;
   options.redirectToHttp = downgradeRedirectsToHttp;
+  options.requireHttps = caPem != nullptr;
   bool answeredBySameOrigin = true;
   const freeink::FetchResult result = freeink::fetchResumable(
       url, options,
       [&](freeink::SecureHttpClient& http, const bool sameOrigin) {
         answeredBySameOrigin = sameOrigin;
-        applyCommonClientSetup(http);
+        applyCommonClientSetup(http, caPem);
         // Credentials and caller headers stay with the starting origin; a
         // redirect elsewhere (or to plain http) gets neither.
         if (sameOrigin) {
@@ -107,6 +112,18 @@ bool HttpDownloader::fetchUrl(const std::string& url, const DataCallback& onData
   freeink::FetchSink sink;
   sink.write = onData;
   return runGetSecure(url, username, password, headers, sink) == OK;
+}
+
+bool HttpDownloader::fetchUrlVerified(const std::string& url, const DataCallback& onData, const char* caPem) {
+  g_lastStatus = 0;
+  g_lastRedirected = false;
+  if (!caPem || !*caPem || freeink::fetchOrigin(url).rfind("https://", 0) != 0) {
+    LOG_ERR("HTTP", "Refusing verified fetch without HTTPS and CA anchors");
+    return false;
+  }
+  freeink::FetchSink sink;
+  sink.write = onData;
+  return runGetSecure(url, "", "", {}, sink, nullptr, nullptr, false, caPem) == OK;
 }
 
 bool HttpDownloader::fetchUrl(const std::string& url, const DataCallback& onData, const FetchOptions& options) {
@@ -228,12 +245,12 @@ HttpDownloader::DownloadError HttpDownloader::postToFile(const std::string& url,
       [cancelFlag] { return cancelFlag && *cancelFlag; });
   // Close before any remove() on the same path; DESTRUCTOR_CLOSES_FILE would
   // otherwise close only after the remove.
-  if (file.isOpen()) file.close();
+  const bool closeOk = !file.isOpen() || file.close();
 
   DownloadError result = OK;
   if (http.aborted()) {
     result = ABORTED;
-  } else if (writeFailed) {
+  } else if (writeFailed || !closeOk) {
     result = FILE_ERROR;
   } else if (status < 200 || status >= 300) {
     LOG_ERR("HTTP", "POST failed: status %d: %s", status, url.c_str());
@@ -279,17 +296,20 @@ HttpDownloader::DownloadError HttpDownloader::downloadToFile(const std::string& 
   sink.write = [&file](const uint8_t* data, size_t len) { return file.write(data, len) == len; };
   // Reopening for write truncates: the server restarted the body from byte 0.
   sink.rewind = [&file, &partPath] {
-    file.close();
+    if (!file.close()) return false;
     return Storage.openFileForWrite("HTTP", partPath.c_str(), file);
   };
   sink.progress = progress;
 
   size_t downloaded = 0;
-  const DownloadError result =
+  DownloadError result =
       runGetSecure(url, username, password, headers, sink, cancelFlag, &downloaded, downgradeRedirectsToHttp);
   // Close before any remove() on the same path; DESTRUCTOR_CLOSES_FILE would
   // otherwise close only after the remove. A failed rewind leaves no open handle.
-  if (file.isOpen()) file.close();
+  if (file.isOpen() && !file.close()) {
+    LOG_ERR("HTTP", "Download close failed");
+    if (result == OK) result = FILE_ERROR;
+  }
 
   if (result != OK) {
     Storage.remove(partPath.c_str());
