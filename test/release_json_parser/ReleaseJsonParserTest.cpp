@@ -1017,6 +1017,28 @@ TEST(CrossTwinsFirmwareVersion, SameReleaseBuildMetadataNeverReinstalls) {
     EXPECT_EQ(compareFirmwareVersions("v1.6.5-ct.1", current), FirmwareVersionOrder::Equal);
   EXPECT_EQ(compareFirmwareVersions("v1.6.5+new", "1.6.5+old"), FirmwareVersionOrder::Equal);
 }
+
+TEST(CrossTwinsFirmwareVersion, CtRcZeroUpgradeAndNoReinstallOrDowngrade) {
+  EXPECT_EQ(compareFirmwareVersions("v2.0.0-rc.ct.0", "1.6.5-ct.7+a635928"), FirmwareVersionOrder::Newer);
+  EXPECT_EQ(compareFirmwareVersions("v2.0.0-rc.ct.0", "2.0.0-rc.ct.0+aaaaaaa"), FirmwareVersionOrder::Equal);
+  EXPECT_EQ(compareFirmwareVersions("v2.0.0-rc.ct.0+bbbbbbb", "2.0.0-rc.ct.0+aaaaaaa"), FirmwareVersionOrder::Equal);
+  EXPECT_EQ(compareFirmwareVersions("v2.0.0-rc.ct.0", "2.0.0"), FirmwareVersionOrder::Older);
+  EXPECT_EQ(compareFirmwareVersions("v2.0.0-rc.ct.1", "2.0.0-rc.ct.0"), FirmwareVersionOrder::Newer);
+  EXPECT_EQ(compareFirmwareVersions("v2.0.0", "2.0.0-rc.ct.9"), FirmwareVersionOrder::Newer);
+  EXPECT_EQ(compareFirmwareVersions("v2.0.0-rc.ct.01", "2.0.0-rc.ct.0"), FirmwareVersionOrder::Invalid);
+}
+
+TEST(CrossTwinsReleaseList, RcPublicationRetainsExactSemverAssetAndUrl) {
+  const auto body = "[" + crossTwinsRelease("v2.0.0-rc.ct.0", "2026-10-22T00:00:00Z", true) + "]";
+  ReleaseListParser parser;
+  ASSERT_TRUE(parser.feed(body.data(), body.size()));
+  ASSERT_TRUE(parser.finishPage());
+  EXPECT_TRUE(parser.foundFirmware());
+  EXPECT_STREQ(parser.getTagName(), "v2.0.0-rc.ct.0");
+  EXPECT_STREQ(
+      parser.getFirmwareUrl(),
+      "https://github.com/meat-holic/CrossTwins/releases/download/v2.0.0-rc.ct.0/crosspoint-2.0.0-rc.ct.0-x3-x4.bin");
+}
 TEST(CrossTwinsFirmwareVersion, SemanticOrdering) {
   for (const auto& pair : {std::pair{"v1.6.5-ct.2", "1.6.5-ct.1+SHA"},
                            {"1.6.5-ct.10", "1.6.5-ct.9"},

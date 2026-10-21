@@ -45,22 +45,27 @@ def write_json(path, value):
         output.write("\n")
 
 
-def context(repository, tag, commit, workflow_sha, sdk, base, run_id, attempt, local=False):
+def context(repository, tag, commit, workflow_sha, sdk, base, run_id, attempt, local=False, prerelease=False):
     require(repository == REPOSITORY, "wrong repository")
     require(bool(re.fullmatch(r"[0-9a-f]{40}", commit)), "commit must be a full lowercase SHA")
     require(commit == workflow_sha, "workflow revision and target SHA must match")
     require(sdk == SDK_SHA, "SDK gitlink differs from approved revision")
     require(bool(re.fullmatch(r"[1-9][0-9]*", run_id)), "invalid run ID")
     require(bool(re.fullmatch(r"[1-9][0-9]*", attempt)), "invalid run attempt")
-    match = re.fullmatch(r"v" + re.escape(base) + r"-ct\.([1-9][0-9]*)", tag)
-    require(match is not None and int(match[1]) >= 3, "only canonical ct.3+ tags may be prepared")
-    release = resolve_release(tag, base, False)
+    require(type(prerelease) is bool, "prerelease must be a boolean")
+    if prerelease:
+        require(re.fullmatch(r"v" + re.escape(base) + r"-rc\.ct\.(0|[1-9][0-9]*)", tag) is not None,
+                "only canonical CrossTwins RC tags may use prerelease preflight")
+    else:
+        match = re.fullmatch(r"v" + re.escape(base) + r"-ct\.([1-9][0-9]*)", tag)
+        require(match is not None and int(match[1]) >= 3, "only canonical ct.3+ tags may be prepared")
+    release = resolve_release(tag, base, prerelease)
     version = firmware_version(release, base, commit[:7])
     require(len(version.encode("ascii")) < 32, "version exceeds descriptor field")
     return {
-        "schema_version": 1, "repository": repository, "release_tag": tag,
+        "schema_version": 2 if prerelease else 1, "repository": repository, "release_tag": tag,
         "commit_sha": commit, "workflow_sha": workflow_sha, "sdk_gitlink_sha": sdk,
-        "base_version": base, "prerelease": False, "run_id": run_id, "run_attempt": attempt,
+        "base_version": base, "prerelease": prerelease, "run_id": run_id, "run_attempt": attempt,
         "mode": "local" if local else "github-actions",
         "firmware_version": version,
         "firmware_suffix": release.firmware_suffix, "platform": PLATFORM,
@@ -68,11 +73,11 @@ def context(repository, tag, commit, workflow_sha, sdk, base, run_id, attempt, l
 
 
 def validate_context(value):
-    require(value["prerelease"] is False and type(value["schema_version"]) is int,
+    require(type(value["prerelease"]) is bool and type(value["schema_version"]) is int,
             "invalid context field types")
     expected = context(value["repository"], value["release_tag"], value["commit_sha"],
                        value["workflow_sha"], value["sdk_gitlink_sha"], value["base_version"],
-                       value["run_id"], value["run_attempt"], value["mode"] == "local")
+                       value["run_id"], value["run_attempt"], value["mode"] == "local", value["prerelease"])
     require(value == expected, "context contract mismatch")
 
 
@@ -81,7 +86,6 @@ def git(*args):
 
 
 def prepare(args):
-    require(args.prerelease == "false", "this preflight prepares regular CrossTwins releases only")
     require(git("rev-parse", "HEAD") == args.commit_sha, "checkout HEAD mismatch")
     link = git("ls-tree", "HEAD", "freeink-sdk").split()
     require(len(link) == 4 and link[:2] == ["160000", "commit"], "missing SDK gitlink")
@@ -94,7 +98,7 @@ def prepare(args):
     require(ini["base"]["platform"] == PLATFORM, "platform/toolchain contract changed")
     require(ini["base"]["board_build.partitions"] == "partitions.csv", "partition source changed")
     value = context(args.repository, args.release_tag, args.commit_sha, args.workflow_sha,
-                    link[2], ini["crosspoint"]["version"], args.run_id, args.run_attempt, args.local)
+                    link[2], ini["crosspoint"]["version"], args.run_id, args.run_attempt, args.local, args.prerelease == "true")
     write_json(args.output, value)
     print(f"firmware_suffix={value['firmware_suffix']}")
     print(f"short_sha={value['commit_sha'][:7]}")
@@ -184,7 +188,7 @@ def validate_device(args):
             "build SDK checkout mismatch")
     if ctx["mode"] == "github-actions":
         require(not git("diff", "HEAD"), "tracked sources changed during release build")
-    name = asset_name(resolve_release(ctx["release_tag"], ctx["base_version"], False), args.device)
+    name = asset_name(resolve_release(ctx["release_tag"], ctx["base_version"], ctx["prerelease"]), args.device)
     require(args.binary.name == name, "asset filename mismatch")
     require(args.environment == PROFILES[args.device][0], "release build environment mismatch")
     table, csv = args.partitions.read_bytes(), args.partition_csv.read_bytes()
@@ -202,7 +206,7 @@ def seal(ctx, directory):
         result = json.loads((directory / f"{device}.json").read_text(encoding="utf-8"))
         require(result["context"] == ctx, "mixed run/attempt/commit context")
         item = result["artifact"]
-        name = asset_name(resolve_release(ctx["release_tag"], ctx["base_version"], False), device)
+        name = asset_name(resolve_release(ctx["release_tag"], ctx["base_version"], ctx["prerelease"]), device)
         require(item["device"] == device and item["asset_name"] == name, "wrong device/filename")
         require(item["environment"] == PROFILES[device][0] and item["chip_id"] == PROFILES[device][1]
                 and item["board_marker"] == PROFILES[device][2], "wrong device contract")

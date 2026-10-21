@@ -92,7 +92,7 @@ class ReleaseVersionTests(unittest.TestCase):
     def test_release_workflow_is_build_only_and_uses_resolved_suffix(self):
         workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/release.yml").read_text()
         self.assertIn("workflow_dispatch:", workflow)
-        self.assertIn("default: v1.6.5-ct.7", workflow)
+        self.assertIn("default: v2.0.0-rc.ct.0", workflow)
         self.assertNotIn("types: [published]", workflow)
         self.assertIn("CROSSPOINT_RC_SUFFIX: ${{ needs.prepare.outputs.suffix }}", workflow)
         self.assertIn("needs: [prepare, checks, build-release]", workflow)

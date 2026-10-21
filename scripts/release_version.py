@@ -34,6 +34,12 @@ def resolve_release(tag: str, base_version: str, prerelease: bool) -> ReleaseVer
             raise ValueError("upstream rc tag must be marked as a prerelease")
         return ReleaseVersion(version, "-rc")
 
+    rc = re.fullmatch(re.escape(base_version) + r"-rc\.ct\.(0|[1-9][0-9]*)", version)
+    if rc:
+        if not prerelease:
+            raise ValueError("CrossTwins RC tag must be marked as a prerelease")
+        return ReleaseVersion(version, f"-rc.ct.{rc[1]}")
+
     match = re.fullmatch(re.escape(base_version) + r"-ct\.([1-9][0-9]*)", version)
     if match:
         # GitHub publication status is independent of the ct identifier in SemVer.
@@ -56,15 +62,51 @@ def firmware_version(release: ReleaseVersion, base_version: str, short_sha: str)
     return f"{base_version}{release.firmware_suffix}+{short_sha}"
 
 
+def display_version(release: ReleaseVersion, base_version: str) -> str:
+    rc = re.fullmatch(r"-rc\.ct\.(0|[1-9][0-9]*)", release.firmware_suffix)
+    if rc:
+        return f"CrossTwins-{base_version}RC-ct.{rc[1]}"
+    return f"CrossTwins-{release.asset_version}"
+
+
+def resolve_publication(tag: str, base_version: str, short_sha: str) -> dict:
+    """Canonical tag-driven output; never creates a tag or publishes a release."""
+    if not re.fullmatch(r"[0-9a-f]{7}", short_sha):
+        raise ValueError("publication requires the exact seven-character source SHA")
+    rc = re.fullmatch(r"v" + re.escape(base_version) + r"-rc\.ct\.(0|[1-9][0-9]*)", tag)
+    if rc:
+        release = resolve_release(tag, base_version, True)
+        prerelease = True
+        notes_tag = tag
+    else:
+        legacy = re.fullmatch(r"v" + re.escape(base_version) + r"-ct\.([1-9][0-9]*)(?:-([0-9a-f]{7}))?", tag)
+        if not legacy or (legacy[2] and legacy[2] != short_sha):
+            raise ValueError("tag does not match the configured version/source")
+        prerelease = bool(legacy[2])
+        notes_tag = f"v{base_version}-ct.{legacy[1]}"
+        release = resolve_release(notes_tag, base_version, prerelease)
+    return {"suffix": release.firmware_suffix, "sha": short_sha,
+            "prerelease": prerelease, "notes": f"docs/release-notes/{notes_tag}.ko.md"}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--tag", required=True)
     parser.add_argument("--base-version", required=True)
-    parser.add_argument("--prerelease", choices=("true", "false"), required=True)
+    parser.add_argument("--prerelease", choices=("true", "false"))
     parser.add_argument("--device", choices=DEVICES)
+    parser.add_argument("--publication-sha")
     args = parser.parse_args()
 
     try:
+        if args.publication_sha is not None:
+            if args.prerelease is not None or args.device is not None:
+                raise ValueError("publication status is resolved from the canonical tag")
+            values = resolve_publication(args.tag, args.base_version, args.publication_sha)
+            print("\n".join(f"{key}={str(value).lower() if isinstance(value, bool) else value}" for key, value in values.items()))
+            return 0
+        if args.prerelease is None:
+            raise ValueError("--prerelease is required for release/asset resolution")
         release = resolve_release(args.tag, args.base_version, args.prerelease == "true")
         outputs = [
             f"asset_version={release.asset_version}",

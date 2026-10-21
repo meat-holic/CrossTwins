@@ -60,7 +60,7 @@ def get_git_branch(project_dir):
 
 def get_git_short_sha(project_dir):
     return run_git_value(
-        project_dir, ['rev-parse', '--short', 'HEAD'], 'short SHA'
+        project_dir, ['rev-parse', '--short=7', 'HEAD'], 'short SHA'
     )
 
 
@@ -78,8 +78,23 @@ def get_base_version(project_dir):
 
 
 def inject_version(env):
-    # Only applies to development environments; release envs set the
-    # version via build_flags in platformio.ini and are unaffected.
+    # Release envs keep the ini descriptor but validate its source identity
+    # and add the separate product display label. Development keeps its label.
+    if env['PIOENV'].endswith('gh_release_rc'):
+        project_dir = env['PROJECT_DIR']
+        sys.path.insert(0, os.path.join(project_dir, 'scripts'))
+        from release_version import resolve_release, display_version
+        base = get_base_version(project_dir)
+        suffix = os.environ.get('CROSSPOINT_RC_SUFFIX', '')
+        source_sha = os.environ.get('CROSSPOINT_RC_HASH', '')
+        if source_sha != get_git_short_sha(project_dir):
+            raise ValueError('RC source SHA does not match checkout HEAD')
+        tag = f'v{base}rc' if suffix == '-rc' else f'v{base}{suffix}'
+        release = resolve_release(tag, base, suffix.startswith('-rc'))
+        if len(f'{base}{suffix}+{source_sha}'.encode('ascii')) > 31:
+            raise ValueError('RC version exceeds IDF descriptor')
+        env.Append(CPPDEFINES=[('USER_VISIBLE_FIRMWARE_VERSION', f'\\"{display_version(release, base)}\\"')])
+        return
     if env['PIOENV'] not in ('default', 'default_ble_off', 'sticky'):
         return
 

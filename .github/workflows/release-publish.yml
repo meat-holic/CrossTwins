@@ -7,7 +7,8 @@ name: Compile Release (publish)
 # Tags:
 #   v<platformio version>-ct.<N>            regular release
 #   v<platformio version>-ct.<N>-<short sha> test build of that commit (pre-release)
-# The firmware reports <version>-ct.<N>+<sha> (the *_rc envs) either way.
+#   v<platformio version>-rc.ct.<N>     CrossTwins RC (N may be zero)
+# Firmware uses SemVer suffix + source SHA; the UI shows CrossTwins-2.0.0RC-ct.0.
 #
 # Assets per board (device = x3-x4 | sticky | x4pro | x4c | papermono):
 #   crosspoint-<ver>-<device>.bin      - app image (OTA slot / SD update; the name OTA looks up)
@@ -18,6 +19,7 @@ on:
   push:
     tags:
       - 'v*-ct.*'
+      - 'v*-rc.ct.*'
 
 permissions:
   contents: read
@@ -32,32 +34,16 @@ jobs:
       notes: ${{ steps.v.outputs.notes }}
     steps:
       - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
       - id: v
         run: |
           set -euo pipefail
           base="$(sed -n 's/^version = //p' platformio.ini | head -n1)"
           sha="$(git rev-parse --short=7 HEAD)"
-          if [[ ! "$GITHUB_REF_NAME" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)-ct\.([1-9][0-9]*)(-([0-9a-f]{7}))?$ ]]; then
-            echo "::error::Tag $GITHUB_REF_NAME must look like v${base}-ct.N or v${base}-ct.N-${sha}"
-            exit 1
-          fi
-          if [ "${BASH_REMATCH[1]}" != "$base" ]; then
-            echo "::error::Tag version ${BASH_REMATCH[1]} does not match platformio.ini $base"
-            exit 1
-          fi
-          prerelease=false
-          if [ -n "${BASH_REMATCH[4]}" ]; then
-            if [ "${BASH_REMATCH[4]}" != "$sha" ]; then
-              echo "::error::Tag SHA ${BASH_REMATCH[4]} does not match the tagged commit $sha"
-              exit 1
-            fi
-            prerelease=true
-          fi
-          echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
-          echo "notes=docs/release-notes/v${base}-ct.${BASH_REMATCH[2]}.ko.md" >> "$GITHUB_OUTPUT"
-          echo "suffix=-ct.${BASH_REMATCH[2]}" >> "$GITHUB_OUTPUT"
-          echo "sha=$sha" >> "$GITHUB_OUTPUT"
-          echo "### firmware version ${base}-ct.${BASH_REMATCH[2]}+${sha}" >> "$GITHUB_STEP_SUMMARY"
+          python scripts/release_version.py --tag "$GITHUB_REF_NAME" \
+            --base-version "$base" --publication-sha "$sha" >> "$GITHUB_OUTPUT"
 
   build-release:
     needs: version

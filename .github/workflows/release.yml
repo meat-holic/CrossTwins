@@ -4,18 +4,18 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: 'Canonical CrossTwins tag (need not exist; ct.7 build target)'
+        description: 'Canonical regular or RC tag; need not exist'
         required: true
-        default: v1.6.5-ct.7
+        default: v2.0.0-rc.ct.0
         type: string
       commit_sha:
         description: 'Full 40-character SHA; must equal the workflow revision'
         required: true
         type: string
       prerelease:
-        description: 'Regular release preparation only; must be false'
+        description: 'true only for a canonical -rc.ct.N prerelease'
         required: true
-        default: false
+        default: true
         type: boolean
 
 permissions:
@@ -36,7 +36,7 @@ jobs:
           [[ "$COMMIT_SHA" =~ ^[0-9a-f]{40}$ ]]
           test "$COMMIT_SHA" = "$GITHUB_SHA"
           test "$GITHUB_REPOSITORY" = meat-holic/CrossTwins
-          test "$PRERELEASE" = false
+          [[ "$PRERELEASE" = false || "$PRERELEASE" = true ]]
       - uses: actions/checkout@v6
         with:
           ref: ${{ inputs.commit_sha }}
@@ -178,13 +178,14 @@ jobs:
           DEVICE: ${{ matrix.device }}
           RELEASE_TAG: ${{ inputs.release_tag }}
           COMMIT_SHA: ${{ inputs.commit_sha }}
+          PRERELEASE: ${{ inputs.prerelease }}
           CROSSPOINT_RC_SUFFIX: ${{ needs.prepare.outputs.suffix }}
           CROSSPOINT_RC_HASH: ${{ needs.prepare.outputs.short_sha }}
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$COMMIT_SHA"
           asset="$(python scripts/release_version.py --tag "$RELEASE_TAG" --base-version \
-            "$(sed -n 's/^version = //p' platformio.ini | head -n1)" --prerelease false \
+            "$(sed -n 's/^version = //p' platformio.ini | head -n1)" --prerelease "$PRERELEASE" \
             --device "$DEVICE" | sed -n 's/^asset_name=//p')"
           test -n "$asset"
           pio run -e "$PIO_ENV" -j1

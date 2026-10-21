@@ -1,4 +1,5 @@
 import copy
+import configparser
 import hashlib
 import json
 import struct
@@ -118,8 +119,13 @@ class PreflightContracts(unittest.TestCase):
         head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
         with tempfile.TemporaryDirectory() as tmp:
             output = Path(tmp) / "context.json"
+            # CLI reads the active platformio base; keep the same ct.3/regular
+            # assertions while the candidate moves from 1.6.5 to 2.0.0.
+            ini = configparser.ConfigParser(interpolation=None)
+            ini.read(root / "platformio.ini", encoding="utf-8")
+            current_tag = f"v{ini['crosspoint']['version']}-ct.3"
             command = [sys.executable, str(root / "scripts/release_preflight.py"), "prepare",
-                       "--repository", REPOSITORY, "--release-tag", "v1.6.5-ct.3",
+                       "--repository", REPOSITORY, "--release-tag", current_tag,
                        "--commit-sha", head, "--workflow-sha", head, "--run-id", "1",
                        "--run-attempt", "1", "--output", str(output), "--local"]
             failed = subprocess.run(command + ["--prerelease", "true"], cwd=root, capture_output=True, text=True)
