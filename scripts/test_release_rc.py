@@ -73,6 +73,14 @@ class CrossTwinsRcContract(unittest.TestCase):
         self.assertEqual(len({name.lower() for name in names}), 14)
         self.assertFalse(any("ble_off" in name or "debug" in name for name in names))
 
+    def test_rc_publication_waits_in_draft_and_cannot_become_latest(self):
+        workflow = (ROOT / ".github/workflows/release-publish.yml").read_text(encoding="utf-8")
+        self.assertIn("draft: ${{ needs.version.outputs.prerelease == 'true' }}", workflow)
+        self.assertIn("prerelease: ${{ needs.version.outputs.prerelease == 'true' }}", workflow)
+        self.assertIn("make_latest: ${{ needs.version.outputs.prerelease == 'true' && 'false' || 'true' }}", workflow)
+        ci = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+        self.assertIn("branches: [master, experiment/upstream-2.0.0rc]", ci)
+
     def test_publication_cli_returns_exact_safe_outputs(self):
         command = [sys.executable, str(ROOT / "scripts/release_version.py"), "--tag", "v2.0.0-rc.ct.0",
                    "--base-version", "2.0.0", "--publication-sha", SHA[:7]]

@@ -2,7 +2,7 @@ name: CI (build)
 
 on:
   push:
-    branches: [master]
+    branches: [master, experiment/upstream-2.0.0rc]
   pull_request:
 
 permissions:

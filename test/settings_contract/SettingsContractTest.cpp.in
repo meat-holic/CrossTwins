@@ -219,6 +219,44 @@ TEST_F(SettingsContract, StoredEnumsRemainCtValues) {
   EXPECT_EQ(SETTINGS.paragraphIndentSpaces, 2);
   EXPECT_EQ(SETTINGS.sleepTimeoutMinutes, 10);
 }
+
+TEST_F(SettingsContract, FreshInstallAndMissingHyphenationUseOnDefault) {
+  EXPECT_EQ(SETTINGS.hyphenationEnabled, 1);
+  load("{}");
+  EXPECT_EQ(SETTINGS.hyphenationEnabled, 1);
+  EXPECT_EQ(saved()["hyphenationEnabled"].as<int>(), 1);
+}
+
+TEST_F(SettingsContract, ExplicitHyphenationChoiceSurvivesRestartAndWebRoundTrip) {
+  for (const int choice : {0, 1}) {
+    const std::string json = "{\"hyphenationEnabled\":" + std::to_string(choice) + "}";
+    load(json.c_str());
+    EXPECT_EQ(SETTINGS.hyphenationEnabled, choice);
+    auto document = saved();
+    SETTINGS = PersistableStore<CrossPointSettings>::defaults();
+    ASSERT_TRUE(SETTINGS.fromJson(document.as<JsonVariantConst>()));
+    EXPECT_EQ(SETTINGS.hyphenationEnabled, choice);
+    post(json.c_str());
+    EXPECT_EQ(SETTINGS.hyphenationEnabled, choice);
+    bool found = false;
+    auto wire = get();
+    for (auto setting : wire.as<JsonArray>()) {
+      if (setting["key"] == "hyphenationEnabled") {
+        found = true;
+        EXPECT_EQ(setting["value"].as<int>(), choice);
+      }
+    }
+    EXPECT_TRUE(found);
+    EXPECT_EQ(saved()["hyphenationEnabled"].as<int>(), choice);
+  }
+}
+
+TEST_F(SettingsContract, UnrelatedSettingsReloadDoesNotEnableExistingOffChoice) {
+  load(R"({"hyphenationEnabled":0})");
+  load(R"({"lineSpacing":2})");
+  EXPECT_EQ(SETTINGS.hyphenationEnabled, 0);
+  EXPECT_EQ(saved()["hyphenationEnabled"].as<int>(), 0);
+}
 TEST_F(SettingsContract, ValidJsonRoundTripPreservesIndependentReaderAndSystemValues) {
   load(
       R"({"language":"KO","fontFamily":1,"fontSize":17,"sdFontFamilyName":"한글","lineSpacing":3,"extraParagraphSpacing":0,"paragraphIndentSpaces":4,"wordSpacing":175,"characterSpacing":4,"paragraphAlignment":3,"sleepTimeoutMinutes":31,"slideshowIntervalSeconds":90,"keyboardLayouts":3,"longPressMenuFunction":2,"shortPwrBtn":4,"opdsDownloadFolder":"/책","dictionaryName":"국어"})");
