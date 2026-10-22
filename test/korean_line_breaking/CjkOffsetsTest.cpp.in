@@ -1,0 +1,102 @@
+#include <CjkLineBreak.h>
+#include <Utf8.h>
+#include <gtest/gtest.h>
+#include <cstdint>
+#include <iostream>
+#include <string>
+#include <utility>
+#include <vector>
+namespace {
+@CJK_PREDICATE@
+@CJK_SCAN@
+// Frozen Slice 12 predicate and scanner: 482861c, before upstream PR #4126.
+bool legacyCjkPredicate(const uint32_t leftCp, const uint32_t rightCp) {
+  if (utf8IsHangul(leftCp) || utf8IsHangul(rightCp)) return false;
+  return cjklinebreak::cjkBoundaryAllowsBreak(leftCp, rightCp);
+}
+
+
+std::vector<size_t> legacyBreakOffsets(const std::string& text) {
+  struct CodepointBoundary {
+    uint32_t cp;
+    size_t endOffset;
+  };
+
+  std::vector<CodepointBoundary> codepoints;
+  codepoints.reserve(text.size());
+  bool hasCjkBreakable = false;
+
+  const auto* ptr = reinterpret_cast<const unsigned char*>(text.c_str());
+  const auto* const start = ptr;
+  while (*ptr) {
+    const uint32_t cp = utf8NextCodepoint(&ptr);
+    if (cp == 0) break;
+    if (utf8IsCjkBreakable(cp)) {
+      hasCjkBreakable = true;
+    }
+    codepoints.push_back({cp, static_cast<size_t>(ptr - start)});
+  }
+
+  if (!hasCjkBreakable || codepoints.size() < 2) return {};
+
+  std::vector<size_t> allowedOffsets;
+  allowedOffsets.reserve(codepoints.size() - 1);
+  for (size_t i = 0; i + 1 < codepoints.size(); ++i) {
+    const uint32_t current = codepoints[i].cp;
+    const uint32_t next = codepoints[i + 1].cp;
+    if (!legacyCjkPredicate(current, next)) continue;
+    allowedOffsets.push_back(codepoints[i].endOffset);
+  }
+  return allowedOffsets;
+}
+
+
+}
+TEST(CjkOffsets, MatchesSlice12ForEveryFourSymbolCombination) {
+  const std::vector<std::string> symbols={"a","1","-"," ","가","나","中","文","字","國","あ","カ","（","）",".","\xCC\x81","\xC2\xAD","\xF0\x9F\x98\x80"};
+  size_t count=0;
+  const auto check=[&](const std::string& text) {
+    ASSERT_EQ(cjkCharacterBreakByteOffsets(text), legacyBreakOffsets(text));
+    ++count;
+  };
+  check("");
+  for(const auto& a:symbols) {
+    check(a);
+    for(const auto& b:symbols) {
+      check(a+b);
+      for(const auto& c:symbols) {
+        check(a+b+c);
+        for(const auto& d:symbols) check(a+b+c+d);
+      }
+    }
+  }
+  EXPECT_EQ(count,111151u);
+  std::cout<<"Compared "<<count<<" scalar-boundary inputs against Slice 12\n";
+}
+TEST(CjkOffsets, MatchesSlice12ForMalformedTruncatedAndEmbeddedNullInputs) {
+  uint32_t state=4126;
+  for(size_t n=0;n<10000;++n) {
+    std::string text;
+    const size_t length=n%201;
+    for(size_t i=0;i<length;++i) {
+      state=state*1664525u+1013904223u;
+      text.push_back(static_cast<char>(state>>24));
+    }
+    ASSERT_EQ(cjkCharacterBreakByteOffsets(text),legacyBreakOffsets(text))<<"input="<<n;
+  }
+  const std::string embedded("中\0文",7);
+  EXPECT_EQ(cjkCharacterBreakByteOffsets(embedded),legacyBreakOffsets(embedded));
+}
+
+TEST(CjkOffsets, FourUpstreamInputsKeepSlice12Offsets) {
+  const std::vector<std::pair<std::string, std::vector<size_t>>> cases{
+      {"ab中가나國cd文", {2, 14, 16}},
+      {"ab-cd가-나中", {}},
+      {"ab--cd", {}},
+      {"（中）文\xCC\x81字", {9, 14}},
+  };
+  for (const auto& [input, expected] : cases) {
+    EXPECT_EQ(legacyBreakOffsets(input), expected) << input;
+    EXPECT_EQ(cjkCharacterBreakByteOffsets(input), expected) << input;
+  }
+}

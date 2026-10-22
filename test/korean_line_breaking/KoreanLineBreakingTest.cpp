@@ -94,3 +94,31 @@ TEST(KoreanLineBreaking, HyphenationOnSplitsBetweenDigitAndHangul) {
   const std::vector<std::vector<std::string>> expected{{"가나다", "12"}, {"월부터", "자"}};
   EXPECT_EQ(wordsOf(lines), expected);
 }
+
+TEST(KoreanLineBreaking, MixedScriptsKeepBoundariesTouchingHangulTogether) {
+  const auto lines = layout({"ab中가나國cd文"}, false, 300);
+  const std::vector<std::vector<std::string>> expected{{"ab", "中가나國", "cd", "文"}};
+  EXPECT_EQ(wordsOf(lines), expected);
+}
+
+TEST(KoreanLineBreaking, CtExplicitHyphensPreserveSlice12Tokenization) {
+  const auto lines = layout({"ab-cd가-나中"}, false, 300);
+  const std::vector<std::vector<std::string>> expected{{"ab-cd가-나中"}};
+  EXPECT_EQ(wordsOf(lines), expected);
+  ASSERT_EQ(lines.size(), 1u);
+  EXPECT_EQ(lines.front().xpos, (std::vector<int16_t>{0}));
+}
+
+TEST(KoreanLineBreaking, CtLatinHyphenRunsPreserveSlice12Tokenization) {
+  const auto lines = layout({"ab--cd"}, false, 300);
+  const std::vector<std::vector<std::string>> expected{{"ab--cd"}};
+  EXPECT_EQ(wordsOf(lines), expected);
+  ASSERT_EQ(lines.size(), 1u);
+  EXPECT_EQ(lines.front().xpos, (std::vector<int16_t>{0}));
+}
+
+TEST(KoreanLineBreaking, CombiningMarksAndCjkPunctuationStayAttached) {
+  const auto lines = layout({"（中）文\xCC\x81字"}, false, 300);
+  const std::vector<std::vector<std::string>> expected{{"（中）", "文\xCC\x81", "字"}};
+  EXPECT_EQ(wordsOf(lines), expected);
+}

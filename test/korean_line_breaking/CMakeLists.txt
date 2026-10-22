@@ -31,3 +31,15 @@ target_link_libraries(KoreanLineBreakingTest PRIVATE
 )
 
 gtest_discover_tests(KoreanLineBreakingTest)
+
+# Exercise the production scanner directly without adding a firmware API.
+production_slice(CJK_PREDICATE lib/Epub/Epub/ParsedText.cpp
+  "bool hasCjkBreakOpportunityBetween(" "// Line-end split points")
+production_slice(CJK_SCAN lib/Epub/Epub/ParsedText.cpp
+  "std::vector<size_t> cjkCharacterBreakByteOffsets(" "int computeJustifyExtra(")
+configure_file(CjkOffsetsTest.cpp.in CjkOffsetsTest.cpp @ONLY)
+add_executable(CjkOffsetsTest ${CMAKE_CURRENT_BINARY_DIR}/CjkOffsetsTest.cpp
+  ${REPO_ROOT}/lib/Utf8/Utf8.cpp)
+target_include_directories(CjkOffsetsTest PRIVATE ${REPO_ROOT}/lib/Epub/Epub ${REPO_ROOT}/lib/Utf8)
+target_link_libraries(CjkOffsetsTest PRIVATE crosspoint_test_common GTest::gtest_main)
+gtest_discover_tests(CjkOffsetsTest)
