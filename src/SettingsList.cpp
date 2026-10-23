@@ -219,7 +219,8 @@ void forEachBaseSetting(SettingVisitor visit, void* context) {
       "koServerUrl", StrId::STR_KOREADER_SYNC));
   emit(SettingInfo::DynamicEnum(
       StrId::STR_SERVER_TYPE, {StrId::STR_CROSSPOINT, StrId::STR_KOSYNC_SERVER, StrId::STR_OTHER},
-      [] { return static_cast<uint8_t>(KOREADER_STORE.getServerType()); }, {}, "koServerType", StrId::STR_KOREADER_SYNC));
+      [] { return static_cast<uint8_t>(KOREADER_STORE.getServerType()); }, {}, "koServerType",
+      StrId::STR_KOREADER_SYNC));
   emit(SettingInfo::DynamicEnum(
       StrId::STR_DOCUMENT_MATCHING, {StrId::STR_FILENAME, StrId::STR_BINARY},
       [] { return static_cast<uint8_t>(KOREADER_STORE.getMatchMethod()); },

@@ -86,43 +86,43 @@ void KOReaderSettingsActivity::activateIndex(const int index) {
   } else if (index == IDX_SERVER_URL) {
     const std::string currentUrl = KOREADER_STORE.getServerUrl();
     const std::string prefillUrl = currentUrl.empty() ? "https://" : currentUrl;
-    startActivityForResult(std::make_unique<KeyboardEntryActivity>(renderer, mappedInput, tr(STR_SYNC_SERVER_URL),
-                                                                   prefillUrl, 128, InputType::Url),
-                           [this](const ActivityResult& result) {
-                             if (!result.isCancelled) {
-                               const auto& kb = std::get<KeyboardResult>(result.data);
-                               const std::string urlToSave =
-                                   (kb.text == "https://" || kb.text == "http://") ? "" : kb.text;
-                               if (urlToSave == KOREADER_STORE.getServerUrl()) return;
-                               const auto current = KOREADER_STORE.getServerType();
-                               if (!KOReaderCredentialStore::isValidServerConfiguration(urlToSave, current)) {
-                                 {
-                                   RenderLock lock(*this);
-                                   GUI.drawPopup(renderer, tr(STR_FAILED_LOWER));
-                                 }
-                                 requestUpdate();
-                                 return;
-                               }
-                               // Preserve the existing profile as the selection; never infer it from the URL.
-                               optionPopup.show(StrId::STR_SERVER_TYPE, serverTypeNames, SERVER_TYPE_ITEMS,
-                                                static_cast<int>(current), [this, urlToSave](const int selected) {
-                                                  if (!KOREADER_STORE.saveServerConfiguration(
-                                                          urlToSave, static_cast<KOReaderServerType>(selected))) {
-                                                    RenderLock lock(*this);
-                                                    GUI.drawPopup(renderer, tr(STR_FAILED_LOWER));
-                                                  }
-                                                  requestUpdate();
-                                                });
-                               requestUpdate();
-                             }
-                           });
+    startActivityForResult(
+        std::make_unique<KeyboardEntryActivity>(renderer, mappedInput, tr(STR_SYNC_SERVER_URL), prefillUrl, 128,
+                                                InputType::Url),
+        [this](const ActivityResult& result) {
+          if (!result.isCancelled) {
+            const auto& kb = std::get<KeyboardResult>(result.data);
+            const std::string urlToSave = (kb.text == "https://" || kb.text == "http://") ? "" : kb.text;
+            if (urlToSave == KOREADER_STORE.getServerUrl()) return;
+            const auto current = KOREADER_STORE.getServerType();
+            if (!KOReaderCredentialStore::isValidServerConfiguration(urlToSave, current)) {
+              {
+                RenderLock lock(*this);
+                GUI.drawPopup(renderer, tr(STR_FAILED_LOWER));
+              }
+              requestUpdate();
+              return;
+            }
+            // Preserve the existing profile as the selection; never infer it from the URL.
+            optionPopup.show(
+                StrId::STR_SERVER_TYPE, serverTypeNames, SERVER_TYPE_ITEMS, static_cast<int>(current),
+                [this, urlToSave](const int selected) {
+                  if (!KOREADER_STORE.saveServerConfiguration(urlToSave, static_cast<KOReaderServerType>(selected))) {
+                    RenderLock lock(*this);
+                    GUI.drawPopup(renderer, tr(STR_FAILED_LOWER));
+                  }
+                  requestUpdate();
+                });
+            requestUpdate();
+          }
+        });
   } else if (index == IDX_SERVER_TYPE) {
     const auto current = KOREADER_STORE.getServerType();
     optionPopup.show(StrId::STR_SERVER_TYPE, serverTypeNames, SERVER_TYPE_ITEMS, static_cast<int>(current),
                      [this](const int selected) {
                        if (selected == static_cast<int>(KOREADER_STORE.getServerType())) return;
                        if (!KOREADER_STORE.saveServerConfiguration(KOREADER_STORE.getServerUrl(),
-                                                                  static_cast<KOReaderServerType>(selected))) {
+                                                                   static_cast<KOReaderServerType>(selected))) {
                          RenderLock lock(*this);
                          GUI.drawPopup(renderer, tr(STR_FAILED_LOWER));
                        }

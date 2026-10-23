@@ -545,9 +545,6 @@ void WebDAVHandler::handleMove(WebServer& s) {
   if (success) {
     clearBookCache(srcPath.c_str());
     if (dstExists) clearBookCache(dstPath.c_str());
-  }
-
-  if (success) {
     s.send(dstExists ? 204 : 201);
   } else {
     s.send(500, "text/plain", "Move failed");

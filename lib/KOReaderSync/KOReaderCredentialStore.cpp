@@ -1,7 +1,7 @@
 #include "KOReaderCredentialStore.h"
 
-#include <Logging.h>
 #include <HalStorage.h>
+#include <Logging.h>
 #include <MD5Builder.h>
 #include <ObfuscationUtils.h>
 
@@ -177,7 +177,8 @@ bool KOReaderCredentialStore::isValidServerConfiguration(std::string_view url, c
   const auto host = authority.substr(0, colon);
   if (host.empty()) return false;
   for (const unsigned char c : host) {
-    if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '.' || c == '-' || c == '_'))
+    if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '.' || c == '-' ||
+          c == '_'))
       return false;
   }
   if (colon != std::string_view::npos) {
@@ -219,7 +220,8 @@ bool KOReaderCredentialStore::saveServerConfiguration(std::string url, const KOR
     return false;
   }
   if (!Storage.rename(pending, getFilePath())) {
-    if (existed && !Storage.rename(backup, getFilePath())) LOG_ERR("KRS", "Server configuration rollback retained backup");
+    if (existed && !Storage.rename(backup, getFilePath()))
+      LOG_ERR("KRS", "Server configuration rollback retained backup");
     Storage.remove(pending);
     return false;
   }
