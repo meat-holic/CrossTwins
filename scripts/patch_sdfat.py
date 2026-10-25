@@ -76,22 +76,21 @@ def apply_patches(project_dir, dependency_dir):
         if current not in (upstream, patched):
             raise RuntimeError("Unrecognized SdFat source: " + relative)
         patch = project / "scripts" / "sdfat_patches" / name
-        # Validate the entire set before changing any dependency files.
-        # Patch files may be checked out with CRLF on Windows while the pinned
-        # SdFat source is LF. The source hash above keeps whitespace-tolerant
-        # matching limited to the reviewed dependency bytes.
-        command = ["git", "apply", "--ignore-whitespace", "--check"]
+        # Normalize patch-file line endings because Windows checkouts can be
+        # CRLF while the pinned SdFat source is LF.
+        patch_text = patch.read_bytes().replace(b"\r\n", b"\n").decode("utf-8")
+        command = ["git", "apply", "--check"]
         if current == patched:
             command.append("--reverse")
-        result = subprocess.run(command + [str(patch)], cwd=dependency,
-                                env=process_env, capture_output=True, text=True)
+        result = subprocess.run(command, cwd=dependency, env=process_env, capture_output=True, text=True,
+                                encoding="utf-8", input=patch_text)
         if result.returncode:
             raise RuntimeError("SdFat patch does not apply: " + name + "\n" + result.stderr)
         if current == upstream:
-            pending.append((patch, target, patched))
-    for patch, target, expected in pending:
-        subprocess.run(["git", "apply", "--ignore-whitespace", str(patch)], cwd=dependency, env=process_env,
-                       check=True)
+            pending.append((patch, target, patched, patch_text))
+    for patch, target, expected, patch_text in pending:
+        subprocess.run(["git", "apply"], cwd=dependency, env=process_env, check=True, text=True,
+                       encoding="utf-8", input=patch_text)
         if digest(target) != expected:
             raise RuntimeError("Unexpected patched SdFat source: " + target.name)
         print("Applied SdFat patch: " + patch.name)
