@@ -81,7 +81,7 @@ static bool wakePowerReleasePending = false;
 
 // Fonts
 EpdFont uiFont(&pretendard_10_regular);
-EpdFontFamily uiFontFamily(&uiFont);
+EpdFontFamily uiFontFamily(10, &uiFont);
 
 // Definitions for SilentRestart.h. RTC_NOINIT survives ESP.restart() but not power loss.
 RTC_NOINIT_ATTR uint32_t silentRebootMagic;
