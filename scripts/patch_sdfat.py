@@ -77,7 +77,10 @@ def apply_patches(project_dir, dependency_dir):
             raise RuntimeError("Unrecognized SdFat source: " + relative)
         patch = project / "scripts" / "sdfat_patches" / name
         # Validate the entire set before changing any dependency files.
-        command = ["git", "apply", "--check"]
+        # Patch files may be checked out with CRLF on Windows while the pinned
+        # SdFat source is LF. The source hash above keeps whitespace-tolerant
+        # matching limited to the reviewed dependency bytes.
+        command = ["git", "apply", "--ignore-whitespace", "--check"]
         if current == patched:
             command.append("--reverse")
         result = subprocess.run(command + [str(patch)], cwd=dependency,
@@ -87,7 +90,8 @@ def apply_patches(project_dir, dependency_dir):
         if current == upstream:
             pending.append((patch, target, patched))
     for patch, target, expected in pending:
-        subprocess.run(["git", "apply", str(patch)], cwd=dependency, env=process_env, check=True)
+        subprocess.run(["git", "apply", "--ignore-whitespace", str(patch)], cwd=dependency, env=process_env,
+                       check=True)
         if digest(target) != expected:
             raise RuntimeError("Unexpected patched SdFat source: " + target.name)
         print("Applied SdFat patch: " + patch.name)
