@@ -71,10 +71,18 @@ jobs:
 
       - name: Extract env
         run: |
+          set -euo pipefail
           echo "SHORT_SHA=${GITHUB_SHA::7}" >> $GITHUB_ENV
           branch_suffix="${GITHUB_REF_NAME#release/}"
-          branch_suffix="${branch_suffix//\//-}"
-          echo "BRANCH_SUFFIX=${branch_suffix}" >> $GITHUB_ENV
+          # Artifact names only use a conservative portable character set. This
+          # also removes slashes, backslashes, control characters and punctuation
+          # rejected by actions/upload-artifact.
+          branch_suffix="$(printf '%s' "$branch_suffix" | sed -E 's/[^A-Za-z0-9_.-]+/-/g; s/^-+|-+$//g')"
+          branch_suffix="${branch_suffix:0:180}"
+          if [[ -z "$branch_suffix" ]]; then
+            branch_suffix="ref-${GITHUB_SHA::7}"
+          fi
+          echo "BRANCH_SUFFIX=${branch_suffix}" >> "$GITHUB_ENV"
 
       - name: Build CrossPoint Release Candidate
         env:
