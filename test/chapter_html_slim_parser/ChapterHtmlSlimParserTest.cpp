@@ -407,7 +407,7 @@ TEST_F(ChapterHtmlSlimParserTest, BlockFontScaleInheritsAndUsesHeadingDefaults) 
 }
 
 TEST_F(ChapterHtmlSlimParserTest, PageImageDeserializeRejectsMissingImageBlock) {
-  const auto path = std::filesystem::temp_directory_path() / "crosspoint-missing-image-cache.bin";
+  const auto path = (std::filesystem::temp_directory_path() / "crosspoint-missing-image-cache.bin").string();
   {
     HalFile output;
     ASSERT_TRUE(output.open(path.c_str(), "wb"));
@@ -856,7 +856,7 @@ TEST_F(ChapterBlockDecorationTest, InheritUsesSemanticParentEmphasisAndRestoresS
 }
 
 TEST_F(ChapterBlockDecorationTest, FontInheritanceUsesWinningCssRuleBeforeInlineOverride) {
-  const auto path = std::filesystem::temp_directory_path() / "crosspoint-font-inheritance.css";
+  const auto path = (std::filesystem::temp_directory_path() / "crosspoint-font-inheritance.css").string();
   {
     HalFile output;
     ASSERT_TRUE(output.open(path.c_str(), "wb"));
@@ -1085,7 +1085,7 @@ TEST_F(ChapterBlockDecorationTest, MultiWordSpanStaysText) {
 }
 
 TEST_F(ChapterBlockDecorationTest, FirstLetterRuleCapturesQuoteAndLetter) {
-  const auto cssPath = std::filesystem::temp_directory_path() / "crosspoint-first-letter.css";
+  const auto cssPath = (std::filesystem::temp_directory_path() / "crosspoint-first-letter.css").string();
   {
     HalFile output;
     ASSERT_TRUE(output.open(cssPath.c_str(), "wb"));
@@ -1388,7 +1388,7 @@ TEST_F(ChapterInlineSizeTest, MixedSizesWithinALineSurviveTheCache) {
   EXPECT_EQ(block.wordFontId(1, UI_FONT_ID), UI_FONT_ID);
   EXPECT_EQ(block.wordFontId(3, UI_FONT_ID), UI_FONT_ID);
 
-  const auto path = std::filesystem::temp_directory_path() / "crosspoint-word-fonts.bin";
+  const auto path = (std::filesystem::temp_directory_path() / "crosspoint-word-fonts.bin").string();
   {
     HalFile output;
     ASSERT_TRUE(output.open(path.c_str(), "wb"));
@@ -1443,7 +1443,7 @@ TEST_F(ChapterInlineSizeTest, UniformLinesCarryNoWordFonts) {
 
 TEST_F(ChapterTableBorderTest, ScansColumnWidthsFromMarkup) {
   renderer.sdFont = true;
-  const auto path = std::filesystem::temp_directory_path() / "crosspoint-table-scan.xhtml";
+  const auto path = (std::filesystem::temp_directory_path() / "crosspoint-table-scan.xhtml").string();
   {
     HalFile output;
     ASSERT_TRUE(output.open(path.c_str(), "wb"));
