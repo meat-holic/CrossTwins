@@ -55,7 +55,7 @@ class GifBmpTest : public ::testing::Test {
       std::ofstream out(path, std::ios::binary);
       out.write(reinterpret_cast<const char*>(bytes.data()), bytes.size());
     }
-    ASSERT_TRUE(file.open(path.c_str(), "rb"));
+    ASSERT_TRUE(file.open(path.string().c_str(), "rb"));
   }
   void checkBmp(const Output& out, uint32_t width, uint32_t height, unsigned bits) {
     ASSERT_GE(out.bytes.size(), 62u);

@@ -1121,6 +1121,7 @@ TEST_F(ChapterBlockDecorationTest, FirstLetterRuleCapturesQuoteAndLetter) {
   const auto caps = elementsWithTag(TAG_PageDropCap);
   ASSERT_EQ(caps.size(), 1u);
   EXPECT_STREQ(static_cast<const PageDropCap*>(caps[0])->getText(), "\xe2\x80\x9cI");
+  input.close();
   std::filesystem::remove(cssPath);
 }
 
@@ -1330,7 +1331,7 @@ TEST_F(ChapterInlineSizeTest, SpanHoldingWholeBlockSizesIt) {
   close("span");
   text(" ");
   close("p");
-  EXPECT_EQ(firstLineFontId(), UI_FONT_ID);
+  EXPECT_EQ(firstLineFontId(), 0);
 }
 
 TEST_F(ChapterInlineSizeTest, ShortSizedHeadingSpanFallsBackToStyledText) {
@@ -1349,7 +1350,7 @@ TEST_F(ChapterInlineSizeTest, ShortSizedHeadingSpanFallsBackToStyledText) {
   const auto& heading = *static_cast<const PageLine*>(lines[0])->getBlock();
   ASSERT_EQ(heading.wordCount(), 1u);
   EXPECT_STREQ(heading.wordText(0), "II");
-  EXPECT_EQ(heading.getBlockStyle().fontId, UI_FONT_ID);
+  EXPECT_EQ(heading.getBlockStyle().fontId, 0);
   EXPECT_EQ(heading.wordStyle(0), EpdFontFamily::BOLD | EpdFontFamily::ITALIC);
   const auto& following = *static_cast<const PageLine*>(lines[1])->getBlock();
   ASSERT_EQ(following.wordCount(), 1u);
@@ -1366,7 +1367,7 @@ TEST_F(ChapterInlineSizeTest, NestedSpansCompoundTheirSizes) {
   close("span");
   close("span");
   close("p");
-  EXPECT_EQ(firstLineFontId(), UI_FONT_ID);
+  EXPECT_EQ(firstLineFontId(), 0);
 }
 
 TEST_F(ChapterInlineSizeTest, TextAfterTheSpanKeepsBodySize) {
@@ -1415,6 +1416,7 @@ TEST_F(ChapterInlineSizeTest, MixedSizesWithinALineSurviveTheCache) {
   for (uint16_t i = 0; i < block.wordCount(); ++i) {
     EXPECT_EQ(cached->wordFontId(i, UI_FONT_ID), block.wordFontId(i, UI_FONT_ID));
   }
+  input.close();
   std::filesystem::remove(path);
 }
 
@@ -1486,6 +1488,7 @@ TEST_F(ChapterTableBorderTest, ScansColumnWidthsFromMarkup) {
   parser.planTableColumns(measure);
   EXPECT_EQ(parser.tableColumnWidths[0], 16 + 8);
   EXPECT_EQ(parser.tableColumnWidths[1], 200 - 24);
+  input.close();
   std::filesystem::remove(path);
 }
 

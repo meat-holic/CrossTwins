@@ -63,6 +63,8 @@ class HalFile {
     std::fseek(file_, offset, SEEK_SET);
     return end > 0 ? static_cast<size_t>(end) : 0;
   }
+  uint64_t fileSize64() const { return static_cast<uint64_t>(size()); }
+  bool seek64(uint64_t pos) { return file_ && std::fseek(file_, static_cast<long>(pos), SEEK_SET) == 0; }
 
   size_t write(const uint8_t* buffer, size_t count) { return write(static_cast<const void*>(buffer), count); }
   void limitWritesTo(size_t count) { writeBytesLeft_ = count; }

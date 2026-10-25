@@ -37,7 +37,7 @@ class GifDecoderTest : public ::testing::Test {
       stream.write(reinterpret_cast<const char*>(bytes.data()), bytes.size());
     }
     HalFile file;
-    EXPECT_TRUE(file.open(path.c_str(), "rb"));
+    EXPECT_TRUE(file.open(path.string().c_str(), "rb"));
     const bool result = GifCommon::readBasicInfo(file, info);
     EXPECT_EQ(file.position(), 0u);
     return result;
@@ -108,7 +108,8 @@ TEST_F(GifDecoderTest, DecodesLargeGlobalPalettesFromMemoryAndFiles) {
     for (const bool fromFile : {false, true}) {
       AnimatedGIF decoder;
       decoder.begin(GIF_PALETTE_RGB888);
-      ASSERT_TRUE(fromFile ? decoder.open(path.c_str(), countRow) : decoder.open(bytes.data(), bytes.size(), countRow));
+      ASSERT_TRUE(fromFile ? decoder.open(path.string().c_str(), countRow)
+                           : decoder.open(bytes.data(), bytes.size(), countRow));
       DrawCount count;
       decoder.playFrame(false, nullptr, &count);
       EXPECT_EQ(decoder.getLastError(), GIF_SUCCESS);
