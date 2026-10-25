@@ -54,7 +54,13 @@ jobs:
           version="${RELEASE_TAG#v}"
           configured_version="$(sed -n 's/^version = //p' platformio.ini | head -n1)"
           if [ "${{ github.event.release.prerelease }}" = "true" ]; then
-            test "$version" = "${configured_version}rc"
+            case "$version" in
+              "${configured_version}-rc"*)
+                suffix="${version#${configured_version}-rc}"
+                [[ "$suffix" =~ ^[0-9]+$ ]]
+                ;;
+              *) exit 1 ;;
+            esac
           else
             test "$version" = "$configured_version"
           fi

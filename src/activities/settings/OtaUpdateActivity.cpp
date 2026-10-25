@@ -4,6 +4,7 @@
 #include <I18n.h>
 #include <WiFi.h>
 
+#include "FirmwareVersion.h"
 #include "MappedInputManager.h"
 #include "SilentRestart.h"
 #include "activities/network/WifiSelectionActivity.h"
@@ -128,7 +129,7 @@ void OtaUpdateActivity::render(RenderLock&&) {
     // Cancel/Update popup doesn't cover it (same layout as ConfirmationActivity).
     const int infoTop = pageHeight / 6;
     renderer.drawText(UI_10_FONT_ID, metrics.contentSidePadding, infoTop,
-                      (std::string(tr(STR_CURRENT_VERSION)) + CROSSPOINT_VERSION).c_str());
+                      (std::string(tr(STR_CURRENT_VERSION)) + CROSSTWINS_VERSION_DISPLAY).c_str());
     renderer.drawText(UI_10_FONT_ID, metrics.contentSidePadding, infoTop + height + metrics.verticalSpacing,
                       (std::string(tr(STR_NEW_VERSION)) + updater.getLatestVersion()).c_str());
 

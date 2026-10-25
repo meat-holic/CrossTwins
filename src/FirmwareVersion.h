@@ -1,0 +1,5 @@
+#pragma once
+
+#ifndef CROSSTWINS_VERSION_DISPLAY
+#define CROSSTWINS_VERSION_DISPLAY "CrossTwins " CROSSPOINT_VERSION
+#endif

@@ -6,6 +6,7 @@
 
 #include <algorithm>
 
+#include "FirmwareVersion.h"
 #include "MappedInputManager.h"
 #include "SettingsActivity.h"
 #include "components/UITheme.h"
@@ -107,5 +108,5 @@ void SettingsListActivity::drawChrome() {
   // Version rides in the header's trailing label slot: the footer position
   // conflicts with button hints on non-touch devices.
   GUI.drawHeader(renderer, Rect{0, metrics.topPadding, renderer.getScreenWidth(), metrics.headerHeight},
-                 tr(STR_SETTINGS_TITLE), CROSSPOINT_VERSION);
+                 tr(STR_SETTINGS_TITLE), CROSSTWINS_VERSION_DISPLAY);
 }
