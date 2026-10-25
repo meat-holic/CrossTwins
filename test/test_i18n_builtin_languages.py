@@ -58,6 +58,34 @@ class BuiltinLanguageGenerationTest(unittest.TestCase):
         self.assertEqual(parse_builtin_langs("all", self.languages), {"EN", "KO"})
         self.assertEqual(parse_builtin_langs("ko", self.languages), {"EN", "KO"})
 
+    def test_only_supported_translation_yaml_files_are_required(self):
+        yaml_names = sorted(path.name for path in TRANSLATIONS_DIR.glob("*.yaml"))
+        self.assertEqual(yaml_names, ["english.yaml", "korean.yaml"])
+
+    def test_legacy_enum_indices_and_keyboard_language_names_are_preserved(self):
+        expected_codes = [
+            "EN", "AR", "AZ", "BE", "BG", "BS", "CA", "CAV", "CS", "DA", "DE", "ES",
+            "FA", "FI", "FR", "HE", "HU", "ID", "IT", "KK", "KO", "LT", "NB", "NL",
+            "OOK", "PL", "PT", "P2", "RO", "RU", "SK", "SI", "SV", "TR", "UK", "VI",
+        ]
+        self.assertEqual(self.languages, expected_codes)
+
+        expected_keyboard_names = {
+            "EN": "English",
+            "FR": "Français",
+            "DE": "Deutsch",
+            "ES": "Español",
+            "RU": "Русский",
+            "UK": "Українська",
+            "BE": "Беларуская",
+            "KK": "Қазақша",
+            "HE": "עברית",
+            "AR": "العربية",
+        }
+        for code, name in expected_keyboard_names.items():
+            with self.subTest(code=code):
+                self.assertEqual(self.language_names[self.languages.index(code)], name)
+
     def test_known_but_unsupported_and_unknown_codes_are_rejected(self):
         for code in ("FR", "DE", "AR", "ZZ"):
             with self.subTest(code=code), self.assertRaises(ValueError):
@@ -92,14 +120,21 @@ class BuiltinLanguageGenerationTest(unittest.TestCase):
             self.assertIn("const char STRINGS_KO_DATA[]", strings_cpp)
             self.assertNotIn("STRINGS_FR_DATA", strings_cpp)
             self.assertNotIn("OFFSETS_FR", strings_cpp)
+            language_names = strings_cpp.split("const char* const LANGUAGE_NAMES[] = {", 1)[1]
+            language_names = language_names.split("};", 1)[0]
+            self.assertEqual(language_names.count(","), len(self.languages))
             self.assertIn("case Language::EN:", keys)
             self.assertIn("case Language::KO:", keys)
             self.assertNotIn("case Language::FR:", keys)
 
             enum_entries = re.findall(
-                r"^\s{2}([A-Z]{2,3})\s+=\s+(\d+)", keys, re.MULTILINE
+                r"^\s{2}([A-Z0-9]{2,3})\s+=\s+(\d+)", keys, re.MULTILINE
             )
             code_by_index = {int(index): code for code, index in enum_entries}
+            self.assertEqual(
+                [code_by_index[index] for index in range(len(self.languages))],
+                self.languages,
+            )
             sorted_match = re.search(
                 r"SORTED_LANGUAGE_INDICES\[\] = \{([^}]+)\}", keys
             )
@@ -113,6 +148,12 @@ class BuiltinLanguageGenerationTest(unittest.TestCase):
             for key in self.string_keys:
                 with self.subTest(key=key):
                     self.assertEqual(len(self.translations[key]), len(self.languages))
+                    for code in self.languages:
+                        if code not in SUPPORTED_BUILTIN_LANGS:
+                            self.assertEqual(
+                                self.translations[key][self.languages.index(code)],
+                                self.translations[key][0],
+                            )
 
 
 if __name__ == "__main__":

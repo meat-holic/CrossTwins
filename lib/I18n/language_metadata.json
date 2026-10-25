@@ -1,0 +1,254 @@
+[
+  {
+    "enum_index": 0,
+    "code": "EN",
+    "name": "English",
+    "bcp47": "en",
+    "legacy_order": "0"
+  },
+  {
+    "enum_index": 1,
+    "code": "AR",
+    "name": "العربية",
+    "bcp47": "ar",
+    "legacy_order": "28"
+  },
+  {
+    "enum_index": 2,
+    "code": "AZ",
+    "name": "Azərbaycanca",
+    "bcp47": "az",
+    "legacy_order": "32"
+  },
+  {
+    "enum_index": 3,
+    "code": "BE",
+    "name": "Беларуская",
+    "bcp47": "be",
+    "legacy_order": "11"
+  },
+  {
+    "enum_index": 4,
+    "code": "BG",
+    "name": "Български",
+    "bcp47": "bg",
+    "legacy_order": "31"
+  },
+  {
+    "enum_index": 5,
+    "code": "BS",
+    "name": "Bosanski",
+    "bcp47": "bs",
+    "legacy_order": "29"
+  },
+  {
+    "enum_index": 6,
+    "code": "CA",
+    "name": "Català",
+    "bcp47": "ca",
+    "legacy_order": "9"
+  },
+  {
+    "enum_index": 7,
+    "code": "CAV",
+    "name": "Valencià",
+    "bcp47": "ca-valencia",
+    "legacy_order": "22"
+  },
+  {
+    "enum_index": 8,
+    "code": "CS",
+    "name": "Čeština",
+    "bcp47": "cs",
+    "legacy_order": "4"
+  },
+  {
+    "enum_index": 9,
+    "code": "DA",
+    "name": "Dansk",
+    "bcp47": "da",
+    "legacy_order": "15"
+  },
+  {
+    "enum_index": 10,
+    "code": "DE",
+    "name": "Deutsch",
+    "bcp47": "de",
+    "legacy_order": "3"
+  },
+  {
+    "enum_index": 11,
+    "code": "ES",
+    "name": "Español",
+    "bcp47": "es",
+    "legacy_order": "1"
+  },
+  {
+    "enum_index": 12,
+    "code": "FA",
+    "name": "فارسی",
+    "bcp47": "fa",
+    "legacy_order": "35"
+  },
+  {
+    "enum_index": 13,
+    "code": "FI",
+    "name": "Suomi",
+    "bcp47": "fi",
+    "legacy_order": "14"
+  },
+  {
+    "enum_index": 14,
+    "code": "FR",
+    "name": "Français",
+    "bcp47": "fr",
+    "legacy_order": "2"
+  },
+  {
+    "enum_index": 15,
+    "code": "HE",
+    "name": "עברית",
+    "bcp47": "he",
+    "legacy_order": "23"
+  },
+  {
+    "enum_index": 16,
+    "code": "HU",
+    "name": "Magyar",
+    "bcp47": "hu",
+    "legacy_order": "19"
+  },
+  {
+    "enum_index": 17,
+    "code": "ID",
+    "name": "Bahasa Indonesia",
+    "bcp47": "id",
+    "legacy_order": "30"
+  },
+  {
+    "enum_index": 18,
+    "code": "IT",
+    "name": "Italiano",
+    "bcp47": "it",
+    "legacy_order": "12"
+  },
+  {
+    "enum_index": 19,
+    "code": "KK",
+    "name": "Қазақша",
+    "bcp47": "kk",
+    "legacy_order": "18"
+  },
+  {
+    "enum_index": 20,
+    "code": "KO",
+    "name": "한국어",
+    "bcp47": "ko",
+    "legacy_order": "36"
+  },
+  {
+    "enum_index": 21,
+    "code": "LT",
+    "name": "Lietuvių",
+    "bcp47": "lt",
+    "legacy_order": "20"
+  },
+  {
+    "enum_index": 22,
+    "code": "NB",
+    "name": "Norsk bokmål",
+    "bcp47": "nb",
+    "legacy_order": "26"
+  },
+  {
+    "enum_index": 23,
+    "code": "NL",
+    "name": "Nederlands",
+    "bcp47": "nl",
+    "legacy_order": "16"
+  },
+  {
+    "enum_index": 24,
+    "code": "OOK",
+    "name": "Orangutan",
+    "bcp47": "ook",
+    "legacy_order": "34"
+  },
+  {
+    "enum_index": 25,
+    "code": "PL",
+    "name": "Polski",
+    "bcp47": "pl",
+    "legacy_order": "13"
+  },
+  {
+    "enum_index": 26,
+    "code": "PT",
+    "name": "Português (Brasil)",
+    "bcp47": "pt-BR",
+    "legacy_order": "5"
+  },
+  {
+    "enum_index": 27,
+    "code": "P2",
+    "name": "Português (Portugal)",
+    "bcp47": "pt-PT",
+    "legacy_order": "27"
+  },
+  {
+    "enum_index": 28,
+    "code": "RO",
+    "name": "Română",
+    "bcp47": "ro",
+    "legacy_order": "8"
+  },
+  {
+    "enum_index": 29,
+    "code": "RU",
+    "name": "Русский",
+    "bcp47": "ru",
+    "legacy_order": "6"
+  },
+  {
+    "enum_index": 30,
+    "code": "SK",
+    "name": "Slovenčina",
+    "bcp47": "sk",
+    "legacy_order": "24"
+  },
+  {
+    "enum_index": 31,
+    "code": "SI",
+    "name": "Slovenščina",
+    "bcp47": "sl",
+    "legacy_order": "21"
+  },
+  {
+    "enum_index": 32,
+    "code": "SV",
+    "name": "Svenska",
+    "bcp47": "sv",
+    "legacy_order": "7"
+  },
+  {
+    "enum_index": 33,
+    "code": "TR",
+    "name": "Türkçe",
+    "bcp47": "tr",
+    "legacy_order": "17"
+  },
+  {
+    "enum_index": 34,
+    "code": "UK",
+    "name": "Українська",
+    "bcp47": "uk",
+    "legacy_order": "10"
+  },
+  {
+    "enum_index": 35,
+    "code": "VI",
+    "name": "Tiếng Việt",
+    "bcp47": "vi",
+    "legacy_order": "25"
+  }
+]

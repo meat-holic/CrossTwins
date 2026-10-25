@@ -1,4 +1,5 @@
 set(I18N_DIR "${REPO_ROOT}/lib/I18n")
+set(I18N_LANGUAGE_METADATA "${I18N_DIR}/language_metadata.json")
 set(I18N_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
 file(GLOB I18N_TRANSLATION_FILES CONFIGURE_DEPENDS "${I18N_DIR}/translations/*.yaml")
 
@@ -12,7 +13,7 @@ add_custom_command(
     "${I18N_DIR}/translations" "${I18N_GENERATED_DIR}"
     --src-dirs "${REPO_ROOT}/src" "${REPO_ROOT}/lib"
     --strip-unused --builtin-langs en,ko
-  DEPENDS ${REPO_ROOT}/scripts/gen_i18n.py ${I18N_TRANSLATION_FILES}
+  DEPENDS ${REPO_ROOT}/scripts/gen_i18n.py ${I18N_LANGUAGE_METADATA} ${I18N_TRANSLATION_FILES}
   WORKING_DIRECTORY "${REPO_ROOT}"
   COMMENT "Generating English and Korean locale tables for host tests"
   VERBATIM
