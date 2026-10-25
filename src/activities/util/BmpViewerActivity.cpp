@@ -6,14 +6,17 @@
 #include <FsHelpers.h>
 #include <GfxRenderer.h>
 #include <HalDisplay.h>
+#include <HalGPIO.h>
 #include <HalStorage.h>
 #include <I18n.h>
 #include <Memory.h>
 
 #include <algorithm>
+#include <cstring>
 
 #include "CrossPointSettings.h"
 #include "activities/util/ConfirmationActivity.h"
+#include "activities/util/IntervalSelectionActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 
@@ -104,6 +107,47 @@ bool BmpViewerActivity::canSetSleepCover() const {
          (overlaySleepMode() && FsHelpers::hasPngExtension(filePath));
 }
 
+void BmpViewerActivity::drawSideHints() {
+  if (mappedInput.hasTouch()) return;
+  const int screenWidth = renderer.getScreenWidth();
+  const int screenHeight = renderer.getScreenHeight();
+  const int width = std::max(1, UITheme::getInstance().getMetrics().sideButtonHintsWidth);
+  const int height = std::max(1, std::min(78, screenHeight / 6));
+  const int gap = 5;
+  const int right = std::max(0, screenWidth - width - 4);
+  const int left = gpio.hasEdgeSideButtons() ? 4 : right;
+  const int top = std::max(0, (screenHeight - 2 * height - gap) / 2);
+
+  const auto drawHint = [this, width, height](const int x, const int y, const bool previous) {
+    const bool grayscalePlane = renderer.getRenderMode() != GfxRenderer::BW && !renderer.grayPlanesAreAbsolute();
+    renderer.fillRect(x, y, width, height, grayscalePlane);
+    if (grayscalePlane) return;
+    renderer.drawRect(x, y, width, height);
+    const int centerX = x + width / 2;
+    const int centerY = y + height / 2;
+    for (int offset = 0; offset < 7; ++offset) {
+      const int row = previous ? centerY - 6 + offset : centerY + 6 - offset;
+      renderer.drawLine(centerX - offset, row, centerX + offset, row);
+    }
+  };
+  drawHint(left, top, true);
+  drawHint(gpio.hasEdgeSideButtons() ? right : left, gpio.hasEdgeSideButtons() ? top : top + height + gap, false);
+}
+
+void BmpViewerActivity::drawViewerHints() {
+  if (slideshowActive) return;
+  const auto labelForHardware = [this](const uint8_t hardware) -> const char* {
+    if (hardware == SETTINGS.frontButtonBack) return tr(STR_BACK);
+    if (hardware == SETTINGS.frontButtonConfirm) return canSetSleepCover() ? tr(STR_SET_SLEEP_COVER) : "";
+    if (hardware == SETTINGS.frontButtonLeft) return siblingImages.size() > 1 ? tr(STR_SLIDESHOW_PLAY) : "";
+    if (hardware == SETTINGS.frontButtonRight) return tr(STR_SETTINGS_TITLE);
+    return "";
+  };
+  GUI.drawButtonHints(renderer, labelForHardware(HalGPIO::BTN_BACK), labelForHardware(HalGPIO::BTN_CONFIRM),
+                      labelForHardware(HalGPIO::BTN_LEFT), labelForHardware(HalGPIO::BTN_RIGHT));
+  drawSideHints();
+}
+
 bool BmpViewerActivity::renderImage() {
   const bool jpeg = FsHelpers::hasJpgExtension(filePath);
   JpegToFramebufferConverter jpegDecoder;
@@ -115,14 +159,9 @@ bool BmpViewerActivity::renderImage() {
   if (dimensions.width <= 0 || dimensions.height <= 0) return false;
 
   const auto config = fitImage(dimensions, renderer);
-  const bool hasPrevious = siblingImages.size() > 1 && currentImageIndex > 0;
-  const bool hasNext = siblingImages.size() > 1 && currentImageIndex != -1 &&
-                       currentImageIndex < static_cast<int>(siblingImages.size()) - 1;
-  const auto labels = mappedInput.mapLabels(tr(STR_BACK), canSetSleepCover() ? tr(STR_SET_SLEEP_COVER) : "",
-                                            hasPrevious ? "<" : "", hasNext ? ">" : "");
   const auto drawImage = [&]() {
     if (!decoder.decodeToFramebuffer(filePath, renderer, config)) return false;
-    GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+    drawViewerHints();
     return true;
   };
 
@@ -166,20 +205,39 @@ void BmpViewerActivity::onEnter() {
     loadSiblingImages();
   }
 
+  slideshowActive = false;
+  slideshowError = false;
+  renderCurrentImage();
+}
+
+void BmpViewerActivity::render(RenderLock&&) {
+  if (slideshowError) {
+    showSlideshowError();
+  } else {
+    renderCurrentImage();
+  }
+}
+
+bool BmpViewerActivity::renderCurrentImage() {
   const auto pageWidth = renderer.getScreenWidth();
   const auto pageHeight = renderer.getScreenHeight();
-  Rect popupRect = GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
-  GUI.fillPopupProgress(renderer, popupRect, 20);  // Initial 20% progress
+  Rect popupRect{};
+  if (!slideshowActive) {
+    popupRect = GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
+    GUI.fillPopupProgress(renderer, popupRect, 20);  // Initial 20% progress
+  }
   if (FsHelpers::hasPngExtension(filePath) || FsHelpers::hasJpgExtension(filePath)) {
     renderer.clearScreen();
     if (!renderImage()) {
+      if (slideshowActive) return false;
       renderer.clearScreen();
       renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2, tr(STR_FILE_OPEN_FAILED));
       const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", "", "");
-      GUI.drawButtonHints(renderer, labels.btn1, "", "", "");
+      GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
       renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+      return false;
     }
-    return;
+    return true;
   }
 
   HalFile file;
@@ -213,28 +271,22 @@ void BmpViewerActivity::onEnter() {
       }
 
       // 4. Prepare Rendering
-      bool hasPrevious = (siblingImages.size() > 1 && currentImageIndex > 0);
-      bool hasNext = (siblingImages.size() > 1 && currentImageIndex != -1 &&
-                      currentImageIndex < static_cast<int>(siblingImages.size()) - 1);
-
-      const auto labels = mappedInput.mapLabels(tr(STR_BACK), canSetSleepCover() ? tr(STR_SET_SLEEP_COVER) : "",
-                                                (hasPrevious ? "<" : ""), (hasNext ? ">" : ""));
-
-      GUI.fillPopupProgress(renderer, popupRect, 50);
+      if (!slideshowActive) GUI.fillPopupProgress(renderer, popupRect, 50);
 
       renderer.clearScreen();
       if (!renderer.drawBitmap(bitmap, x, y, pageWidth, pageHeight, 0, 0)) {
+        if (slideshowActive) return false;
         renderer.clearScreen();
         renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2, tr(STR_FILE_OPEN_FAILED));
         renderer.displayBuffer(HalDisplay::HALF_REFRESH);
-        return;
+        return false;
       }
 
       // Draw UI hints on the base layer
-      GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+      drawViewerHints();
       if (bitmap.hasGreyscale()) {
         const bool absolute = renderer.grayscaleCapabilities(HalDisplay::GrayscaleMode::Absolute).supported();
-        if (absolute && !renderer.displayGrayscaleBase(HalDisplay::GrayscaleMode::Absolute)) return;
+        if (absolute && !renderer.displayGrayscaleBase(HalDisplay::GrayscaleMode::Absolute)) return false;
         if (!absolute) renderer.displayGrayscaleBase(HalDisplay::HALF_REFRESH);
         bool planesReady = true;
         for (const auto mode : {GfxRenderer::GRAYSCALE_LSB, GfxRenderer::GRAYSCALE_MSB}) {
@@ -249,7 +301,7 @@ void BmpViewerActivity::onEnter() {
             planesReady = false;
             break;
           }
-          GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+          drawViewerHints();
           if (mode == GfxRenderer::GRAYSCALE_LSB) {
             renderer.copyGrayscaleLsbBuffers();
           } else {
@@ -267,34 +319,41 @@ void BmpViewerActivity::onEnter() {
           renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2, tr(STR_FILE_OPEN_FAILED));
           planesReady = false;
         }
-        GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+        drawViewerHints();
         renderer.cleanupGrayscaleWithFrameBuffer();
-        if (!planesReady) renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+        if (!planesReady && !slideshowActive) renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+        if (!planesReady) return false;
       } else {
         renderer.displayBuffer(HalDisplay::FAST_REFRESH);
       }
+      return true;
 
     } else {
       // Handle file parsing error
+      if (slideshowActive) return false;
       renderer.clearScreen();
       renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2, tr(STR_INVALID_BMP_FILE));
       const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", "", "");
       GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
       renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+      return false;
     }
 
     file.close();
   } else {
     // Handle file open error
+    if (slideshowActive) return false;
     renderer.clearScreen();
     renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2, tr(STR_FILE_OPEN_FAILED));
     const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", "", "");
     GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
     renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+    return false;
   }
 }
 
 void BmpViewerActivity::onExit() {
+  slideshowActive = false;
   Activity::onExit();
   renderer.clearScreen();
   renderer.displayBuffer(HalDisplay::HALF_REFRESH);
@@ -439,30 +498,83 @@ void BmpViewerActivity::doSetSleepCover() {
   onEnter();
 }
 
+bool BmpViewerActivity::openSibling(const int delta, const bool wrap) {
+  const int count = static_cast<int>(siblingImages.size());
+  if (currentImageIndex < 0 || count <= 1) return false;
+  int nextIndex = currentImageIndex + delta;
+  if (wrap && (nextIndex < 0 || nextIndex >= count)) nextIndex = (nextIndex + count) % count;
+  if (nextIndex < 0 || nextIndex >= count) return false;
+
+  currentImageIndex = nextIndex;
+  std::string dirPath = FsHelpers::extractFolderPath(filePath);
+  if (!dirPath.empty() && dirPath.back() != '/') dirPath += "/";
+  filePath = dirPath + siblingImages[static_cast<size_t>(currentImageIndex)];
+  return renderCurrentImage();
+}
+
+void BmpViewerActivity::showSlideshowError() {
+  renderer.setRenderMode(GfxRenderer::BW);
+  renderer.clearScreen();
+  const int height = renderer.getScreenHeight();
+  const int lineHeight = renderer.getLineHeight(UI_10_FONT_ID);
+  renderer.drawCenteredText(UI_10_FONT_ID, height / 2 - lineHeight, tr(STR_SLIDESHOW_ERROR));
+  const char* filename = std::strrchr(filePath.c_str(), '/');
+  filename = filename ? filename + 1 : filePath.c_str();
+  const auto lines = renderer.wrappedText(UI_10_FONT_ID, filename, std::max(1, renderer.getScreenWidth() - 40), 2);
+  for (size_t i = 0; i < lines.size(); ++i) {
+    renderer.drawCenteredText(UI_10_FONT_ID, height / 2 + static_cast<int>(i) * lineHeight, lines[i].c_str());
+  }
+  renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+}
+
+void BmpViewerActivity::openIntervalPicker() {
+  auto activity = makeUniqueNoThrow<IntervalSelectionActivity>(
+      renderer, mappedInput, "SlideshowInterval", StrId::STR_SLIDESHOW_INTERVAL, SETTINGS.slideshowIntervalSeconds,
+      CrossPointSettings::MIN_SLIDESHOW_INTERVAL_SECONDS, CrossPointSettings::MAX_SLIDESHOW_INTERVAL_SECONDS, 10, 60,
+      StrId::STR_NONE_OPT, false, StrId::STR_NONE_OPT, true);
+  if (!activity) {
+    LOG_ERR("BMP", "OOM: slideshow interval picker");
+    return;
+  }
+  startActivityForResult(std::move(activity), [this](const ActivityResult& result) {
+    if (!result.isCancelled) {
+      const uint16_t selected = static_cast<uint16_t>(std::get<IntervalResult>(result.data).value);
+      if (selected != SETTINGS.slideshowIntervalSeconds) {
+        SETTINGS.slideshowIntervalSeconds = selected;
+        SETTINGS.saveToFile();
+      }
+    }
+    requestUpdate();
+  });
+}
+
 void BmpViewerActivity::loop() {
-  // Keep CPU awake/polling so 1st click works
   Activity::loop();
 
-  auto openSibling = [this](const int delta) {
-    if (currentImageIndex < 0) {
-      return false;
-    }
-    const int nextIndex = currentImageIndex + delta;
-    if (siblingImages.size() <= 1 || nextIndex < 0 || nextIndex >= static_cast<int>(siblingImages.size())) {
-      return false;
-    }
-    currentImageIndex = nextIndex;
-    std::string dirPath = FsHelpers::extractFolderPath(filePath);
-    if (dirPath.back() != '/') dirPath += "/";
-    filePath = dirPath + siblingImages[currentImageIndex];
-    onEnter();
-    return true;
-  };
-
   if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
+    if (slideshowActive) {
+      slideshowActive = false;
+      renderCurrentImage();
+      return;
+    }
     activityManager.goToFileBrowser(filePath);
     return;
   }
+
+  if (slideshowActive) {
+    const uint32_t intervalMs = static_cast<uint32_t>(SETTINGS.slideshowIntervalSeconds) * 1000U;
+    if (siblingImages.size() > 1 && static_cast<uint32_t>(millis() - lastSlideDisplayMs) >= intervalMs) {
+      if (openSibling(1, true)) {
+        lastSlideDisplayMs = millis();
+      } else {
+        slideshowActive = false;
+        slideshowError = true;
+        showSlideshowError();
+      }
+    }
+    return;
+  }
+  if (slideshowError) return;
 
   const auto swipe = mappedInput.wasSwipe();
   if (swipe == MappedInputManager::SwipeDir::Left) {
@@ -493,14 +605,31 @@ void BmpViewerActivity::loop() {
     return;
   }
 
-  if (mappedInput.wasReleased(MappedInputManager::Button::Left) ||
-      mappedInput.wasReleased(MappedInputManager::Button::Up)) {
+  if (mappedInput.wasReleased(MappedInputManager::Button::Left)) {
+    if (siblingImages.size() > 1 && currentImageIndex >= 0) {
+      slideshowActive = true;
+      if (renderCurrentImage()) {
+        lastSlideDisplayMs = millis();
+      } else {
+        slideshowActive = false;
+        slideshowError = true;
+        showSlideshowError();
+      }
+    }
+    return;
+  }
+
+  if (mappedInput.wasReleased(MappedInputManager::Button::Right)) {
+    openIntervalPicker();
+    return;
+  }
+
+  if (mappedInput.wasReleased(MappedInputManager::Button::Up)) {
     openSibling(-1);
     return;
   }
 
-  if (mappedInput.wasReleased(MappedInputManager::Button::Right) ||
-      mappedInput.wasReleased(MappedInputManager::Button::Down)) {
+  if (mappedInput.wasReleased(MappedInputManager::Button::Down)) {
     openSibling(1);
     return;
   }

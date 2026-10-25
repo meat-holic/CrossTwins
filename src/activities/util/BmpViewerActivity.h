@@ -1,7 +1,9 @@
 #pragma once
 
+#include <cstdint>
 #include <functional>
 #include <string>
+#include <vector>
 
 #include "MappedInputManager.h"
 #include "activities/Activity.h"
@@ -13,15 +15,26 @@ class BmpViewerActivity final : public Activity {
   void onEnter() override;
   void onExit() override;
   void loop() override;
+  void render(RenderLock&&) override;
+  bool preventAutoSleep() override { return slideshowActive; }
 
  private:
   void loadSiblingImages();
   void doSetSleepCover();
   bool canSetSleepCover() const;
   bool renderImage();
+  bool renderCurrentImage();
+  bool openSibling(int delta, bool wrap = false);
+  void drawViewerHints();
+  void drawSideHints();
+  void showSlideshowError();
+  void openIntervalPicker();
   bool saveJpegSleepCover();
 
   std::string filePath;
   std::vector<std::string> siblingImages;
   int currentImageIndex = -1;
+  bool slideshowActive = false;
+  bool slideshowError = false;
+  uint32_t lastSlideDisplayMs = 0;
 };

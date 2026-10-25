@@ -119,6 +119,8 @@ void CrossPointSettings::toJson(JsonDocument& doc) const {
     doc["keyboardLayouts"] = keyboardLayouts;
   }
 
+  doc["slideshowIntervalSeconds"] = slideshowIntervalSeconds;
+
   bleturner::writeJson(ble, doc);
 }
 
@@ -289,6 +291,13 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
   // Absent means unconfigured, which is the default.
   if (doc["keyboardLayouts"].is<uint16_t>()) {
     keyboardLayouts = doc["keyboardLayouts"].as<uint16_t>();
+  }
+
+  slideshowIntervalSeconds = 60;
+  if (doc["slideshowIntervalSeconds"].is<int>()) {
+    const int saved = doc["slideshowIntervalSeconds"].as<int>();
+    slideshowIntervalSeconds = static_cast<uint16_t>(std::clamp(saved, static_cast<int>(MIN_SLIDESHOW_INTERVAL_SECONDS),
+                                                                static_cast<int>(MAX_SLIDESHOW_INTERVAL_SECONDS)));
   }
 
   if (!bleturner::readJson(ble, doc)) {
