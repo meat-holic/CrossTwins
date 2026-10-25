@@ -6,6 +6,7 @@
 #include "RecentBooksStore.h"
 #include "activities/Activity.h"
 #include "components/CoverGridHomeUi.h"
+#include "util/BookProgress.h"
 #include "util/ButtonNavigator.h"
 
 struct Rect;
@@ -23,6 +24,8 @@ class HomeActivity final : public Activity {
   // installed, otherwise OPDS. The index converters gate on its presence.
   bool hasLibrarySlot() const { return hasPlugins || hasOpdsServers; }
   bool hasContinueReading = false;
+  bool homeUsesSingleLyra = false;
+  BookProgressSnapshot bookProgressSnapshot;
   bool coverRendered = false;      // Track if cover has been rendered once
   bool coverBufferStored = false;  // Track if cover buffer is stored
   uint8_t* coverBuffer = nullptr;  // HomeActivity's own buffer for cover image
