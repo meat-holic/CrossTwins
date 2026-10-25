@@ -68,7 +68,8 @@ class HalStorage {
 
   bool remove(const char* path) { return std::remove(path) == 0; }
   bool rename(const char* from, const char* to) {
-    if (from == failedRenameFrom_ && to == failedRenameTo_) {
+    if (normalizePath(from) == normalizePath(failedRenameFrom_) &&
+        normalizePath(to) == normalizePath(failedRenameTo_)) {
       clearFailures();
       return false;
     }
@@ -91,6 +92,13 @@ class HalStorage {
   bool openFileForWrite(const char*, const std::string& path, HalFile& file) { return file.open(path.c_str(), "wb"); }
 
  private:
+  static std::string normalizePath(std::string path) {
+    for (char& character : path) {
+      if (character == '\\') character = '/';
+    }
+    return path;
+  }
+
   std::string failedRenameFrom_;
   std::string failedRenameTo_;
 };

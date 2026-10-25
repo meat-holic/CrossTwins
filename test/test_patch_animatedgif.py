@@ -42,8 +42,9 @@ class PatchAnimatedGifTest(unittest.TestCase):
         self.assertEqual(first, {p.name: p.read_bytes() for p in (active / "src").iterdir()})
         self.assertEqual((sibling / "src" / "AnimatedGIF.h").read_text(), PATCH.OLD_SNIPPET)
         self.assertEqual((sibling / "src" / "gif.inl").read_text(), PATCH.PALETTE_OLD + PATCH.COPY_OLD)
-        self.assertIn(PATCH.PALETTE_NEW, first["gif.inl"].decode())
-        self.assertIn(PATCH.COPY_NEW, first["gif.inl"].decode())
+        patched_gif = first["gif.inl"].decode().replace("\r\n", "\n")
+        self.assertIn(PATCH.PALETTE_NEW, patched_gif)
+        self.assertIn(PATCH.COPY_NEW, patched_gif)
 
     def test_unknown_decoder_source_fails_without_rewriting_it(self):
         source = self.library() / "src" / "gif.inl"
