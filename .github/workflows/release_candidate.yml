@@ -72,7 +72,9 @@ jobs:
       - name: Extract env
         run: |
           echo "SHORT_SHA=${GITHUB_SHA::7}" >> $GITHUB_ENV
-          echo "BRANCH_SUFFIX=${GITHUB_REF_NAME#release/}" >> $GITHUB_ENV
+          branch_suffix="${GITHUB_REF_NAME#release/}"
+          branch_suffix="${branch_suffix//\//-}"
+          echo "BRANCH_SUFFIX=${branch_suffix}" >> $GITHUB_ENV
 
       - name: Build CrossPoint Release Candidate
         env:
