@@ -78,19 +78,17 @@ def apply_patches(project_dir, dependency_dir):
         patch = project / "scripts" / "sdfat_patches" / name
         # Normalize patch-file line endings because Windows checkouts can be
         # CRLF while the pinned SdFat source is LF.
-        patch_text = patch.read_bytes().replace(b"\r\n", b"\n").decode("utf-8")
+        patch_data = patch.read_bytes().replace(b"\r\n", b"\n")
         command = ["git", "apply", "--check"]
         if current == patched:
             command.append("--reverse")
-        result = subprocess.run(command, cwd=dependency, env=process_env, capture_output=True, text=True,
-                                encoding="utf-8", input=patch_text)
+        result = subprocess.run(command, cwd=dependency, env=process_env, capture_output=True, input=patch_data)
         if result.returncode:
-            raise RuntimeError("SdFat patch does not apply: " + name + "\n" + result.stderr)
+            raise RuntimeError("SdFat patch does not apply: " + name + "\n" + result.stderr.decode("utf-8", "replace"))
         if current == upstream:
-            pending.append((patch, target, patched, patch_text))
-    for patch, target, expected, patch_text in pending:
-        subprocess.run(["git", "apply"], cwd=dependency, env=process_env, check=True, text=True,
-                       encoding="utf-8", input=patch_text)
+            pending.append((patch, target, patched, patch_data))
+    for patch, target, expected, patch_data in pending:
+        subprocess.run(["git", "apply"], cwd=dependency, env=process_env, check=True, input=patch_data)
         if digest(target) != expected:
             raise RuntimeError("Unexpected patched SdFat source: " + target.name)
         print("Applied SdFat patch: " + patch.name)
