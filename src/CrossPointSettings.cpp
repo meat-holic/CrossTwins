@@ -110,7 +110,7 @@ void CrossPointSettings::toJson(JsonDocument& doc) const {
   doc["shortPwrBtn"] = shortPwrBtn;
 
   // Language -- managed by LanguageSelectActivity, not in SettingsList.
-  // Stored as ISO code string ("EN", "DE", ...) for stability across enum reorders.
+  // Stored as an ISO code string for stability across enum reorders.
   doc["language"] = (language < getLanguageCount()) ? LANGUAGE_CODES[language] : "EN";
 
   // A uint16_t mask, so it does not fit the uint8_t generic loop. Omitted while
@@ -283,9 +283,12 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
   if (storedFontFamily != STORED_PRETENDARD) needsResave = true;
   // Dictionary folder name — uses dynamic getter/setter in SettingsList, load manually
   copyToField(dictionaryName, doc["dictionaryName"] | "", sizeof(dictionaryName));
-  // Language -- stored as code string for stability across enum reorders.
+  // Language -- unsupported saved codes resolve to English and are rewritten.
   if (doc["language"].is<const char*>()) {
-    language = static_cast<uint8_t>(I18n::languageFromCode(doc["language"].as<const char*>()));
+    const char* savedLanguage = doc["language"].as<const char*>();
+    const Language resolvedLanguage = I18n::languageFromCode(savedLanguage);
+    language = static_cast<uint8_t>(resolvedLanguage);
+    if (strcmp(savedLanguage, LANGUAGE_CODES[language]) != 0) needsResave = true;
   }
 
   // Absent means unconfigured, which is the default.

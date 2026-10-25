@@ -1,9 +1,9 @@
 #include "I18n.h"
 
+#include <I18nStrings.h>
+
 #include <cstddef>
 #include <cstring>
-
-#include "I18nStrings.h"
 
 using namespace i18n_strings;
 
@@ -27,12 +27,7 @@ const char* I18n::get(StrId id) const {
   return lang.data + off;
 }
 
-void I18n::setLanguage(Language lang) {
-  if (lang >= Language::_COUNT) {
-    return;
-  }
-  _language = lang;
-}
+void I18n::setLanguage(Language lang) { _language = isLanguageBuiltIn(lang) ? lang : Language::EN; }
 
 const char* I18n::getLanguageName(Language lang) const {
   const auto index = static_cast<size_t>(lang);
@@ -43,8 +38,12 @@ const char* I18n::getLanguageName(Language lang) const {
 }
 
 Language I18n::languageFromCode(const char* code) {
+  if (code == nullptr) return Language::EN;
   for (uint8_t i = 0; i < getLanguageCount(); i++) {
-    if (strcmp(code, LANGUAGE_CODES[i]) == 0) return static_cast<Language>(i);
+    if (strcmp(code, LANGUAGE_CODES[i]) == 0) {
+      const Language language = static_cast<Language>(i);
+      return isLanguageBuiltIn(language) ? language : Language::EN;
+    }
   }
   return Language::EN;
 }
@@ -52,8 +51,8 @@ Language I18n::languageFromCode(const char* code) {
 // Generate character set for a specific language
 const char* I18n::getCharacterSet(Language lang) {
   const auto langIndex = static_cast<size_t>(lang);
-  if (langIndex >= static_cast<size_t>(Language::_COUNT)) {
-    lang = Language::EN;  // Fallback to first language
+  if (langIndex >= static_cast<size_t>(Language::_COUNT) || !isLanguageBuiltIn(lang)) {
+    lang = Language::EN;
   }
 
   return CHARACTER_SETS[static_cast<size_t>(lang)];

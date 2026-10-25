@@ -1,8 +1,8 @@
 #pragma once
 
-#include <cstdint>
+#include <I18nKeys.h>
 
-#include "I18nKeys.h"
+#include <cstdint>
 /**
  * Internationalization (i18n) system for CrossPoint Reader
  */
