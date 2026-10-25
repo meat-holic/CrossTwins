@@ -94,7 +94,7 @@ void CrossPointSettings::toJson(JsonDocument& doc) const {
   doc["frontButtonRight"] = frontButtonRight;
   // Font family and size — both use dynamic getter/setters in SettingsList (the
   // option lists depend on the SD font registry), so the generic loop skips them.
-  doc["fontFamily"] = STORED_NOTOSANS;
+  doc["fontFamily"] = STORED_PRETENDARD;
   doc["fontSize"] = fontPointSize;
   // SD card font family name — not in SettingsList, save manually
   if (sdFontFamilyName[0] != '\0') {
@@ -246,8 +246,8 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
   fontPointSize = storedFontSize;
 
   // Font family — uses dynamic getter/setter in SettingsList so the generic loop skips it.
-  const uint8_t storedFontFamily = doc["fontFamily"] | STORED_NOTOSANS;
-  fontFamily = NOTOSANS;
+  const uint8_t storedFontFamily = doc["fontFamily"] | STORED_PRETENDARD;
+  fontFamily = PRETENDARD;
   // These controls use board-specific display-index mappings and are skipped by
   // the generic settings loop. Persisted action IDs remain stable across boards.
   longPressMenuFunction = clamp(doc["longPressMenuFunction"] | (uint8_t)LP_MENU_DISABLED,
@@ -278,7 +278,7 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
         break;
     }
   }
-  if (storedFontFamily != STORED_NOTOSANS) needsResave = true;
+  if (storedFontFamily != STORED_PRETENDARD) needsResave = true;
   // Dictionary folder name — uses dynamic getter/setter in SettingsList, load manually
   copyToField(dictionaryName, doc["dictionaryName"] | "", sizeof(dictionaryName));
   // Language -- stored as code string for stability across enum reorders.
@@ -413,21 +413,7 @@ int CrossPointSettings::getReaderFontId() const {
     // Fall through to built-in if SD font not found
   }
 
-  // A built-in family only exists at BUILTIN_READER_POINT_SIZES, so a size
-  // carried over from an SD family may not be one of them. ensureLoaded()
-  // normally persists the snap; snap again here (without allocating — this runs
-  // in the page render loop) so rendering is correct even before it has run.
-  const uint8_t pt =
-      snapToNearestPointSize(BUILTIN_READER_POINT_SIZES, std::size(BUILTIN_READER_POINT_SIZES), fontPointSize);
-  switch (pt) {
-    case 12:
-      return NOTOSANS_12_FONT_ID;
-    case 16:
-      return NOTOSANS_16_FONT_ID;
-    case 18:
-      return NOTOSANS_18_FONT_ID;
-    case 14:
-    default:
-      return NOTOSANS_14_FONT_ID;
-  }
+  // The built-in family is a single 10 pt resource. SD font resolution above
+  // retains the user's selected family and point size when it is available.
+  return UI_FONT_ID;
 }

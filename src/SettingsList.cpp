@@ -71,7 +71,7 @@ void forEachBaseSetting(SettingVisitor visit, void* context) {
   // --- Reader ---
   // Built-in font-family entry. Replaced per-call with a registry-aware
   // version when SD fonts are installed.
-  emit(SettingInfo::Enum(StrId::STR_FONT_FAMILY, &CrossPointSettings::fontFamily, {StrId::STR_NOTO_SANS}, "fontFamily",
+  emit(SettingInfo::Enum(StrId::STR_FONT_FAMILY, &CrossPointSettings::fontFamily, {StrId::STR_PRETENDARD}, "fontFamily",
                          StrId::STR_CAT_READER)
            .withTextSettings());
   // Placeholder: the selectable sizes depend on the active font family, so

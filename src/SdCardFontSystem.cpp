@@ -54,19 +54,13 @@ void snapFontPointSizeTo(const uint8_t availablePointSize) {
   SETTINGS.saveToFile();
 }
 
-// Built-in UI fonts and their physical point sizes (at 150 DPI, matching the
-// SD-font converter). Each is paired with a same-size SD fallback so UI text
-// in scripts the built-ins lack (CJK, Greek, Cyrillic, ...) matches the
-// surrounding Latin. See SdCardFontSystem::setupUiFallbacks.
+// The single built-in Pretendard UI face can use one matching-size SD fallback
+// for scripts beyond its bundled glyph coverage. See setupUiFallbacks.
 struct UiFontSize {
   int fontId;
   uint8_t pointSize;
 };
-constexpr UiFontSize kUiFontSizes[] = {
-    {SMALL_FONT_ID, 8},
-    {UI_10_FONT_ID, 10},
-    {UI_12_FONT_ID, 12},
-};
+constexpr UiFontSize kUiFontSizes[] = {{UI_FONT_ID, 10}};
 
 }  // namespace
 
@@ -117,6 +111,11 @@ void SdCardFontSystem::begin(GfxRenderer& renderer) {
       LOG_DBG("SDFS", "SD font family not found on card: %s (clearing)", SETTINGS.sdFontFamilyName);
       SETTINGS.clearSdFontFamily();
     }
+  } else {
+    // Migrate old built-in sizes when no SD reader font is selected. Saved SD
+    // sizes are left to the family loader above.
+    snapFontPointSizeTo(snapToNearestPointSize(BUILTIN_READER_POINT_SIZES, std::size(BUILTIN_READER_POINT_SIZES),
+                                               SETTINGS.fontPointSize));
   }
 
   LOG_DBG("SDFS", "SD font system ready (%d families discovered)", registry_.getFamilyCount());

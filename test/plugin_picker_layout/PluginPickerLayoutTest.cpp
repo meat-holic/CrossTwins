@@ -1,6 +1,5 @@
 #include <EpdFont.h>
-#include <builtinFonts/ubuntu_10_regular.h>
-#include <builtinFonts/ubuntu_12_regular.h>
+#include <builtinFonts/pretendard_10_regular.h>
 #include <gtest/gtest.h>
 
 #include <string>
@@ -18,9 +17,7 @@ class FontTarget final : public fui::DrawTarget {
     (font == 0 ? small : body).getTextDimensions(text, &width, &height);
     return {static_cast<int16_t>(width), lineHeight(font)};
   }
-  int16_t lineHeight(fui::FontId font) const override {
-    return font == 0 ? ubuntu_10_regular.advanceY : ubuntu_12_regular.advanceY;
-  }
+  int16_t lineHeight(fui::FontId font) const override { return pretendard_10_regular.advanceY; }
   void fill(fui::Rect, fui::Paint, uint8_t, uint8_t) override {}
   void stroke(fui::Rect, fui::Paint, uint8_t, uint8_t, uint8_t) override {}
   void line(fui::Point, fui::Point, uint8_t, fui::Paint) override {}
@@ -29,8 +26,8 @@ class FontTarget final : public fui::DrawTarget {
   void bitmap(fui::Rect, fui::BitmapRef, fui::BitmapMode, fui::Paint, fui::Rotation) override {}
 
  private:
-  EpdFont small{&ubuntu_10_regular};
-  EpdFont body{&ubuntu_12_regular};
+  EpdFont small{&pretendard_10_regular};
+  EpdFont body{&pretendard_10_regular};
 };
 
 fui::ListProps pickerProps() {

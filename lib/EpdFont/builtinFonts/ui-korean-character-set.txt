@@ -1,0 +1,2 @@
+# Complete Hangul syllable block (11,172 codepoints)
+U+AC00-U+D7A3
