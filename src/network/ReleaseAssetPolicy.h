@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <string_view>
 
@@ -23,10 +24,9 @@ inline constexpr std::array<BoardAsset, 6> BOARDS{{
 }};
 
 constexpr std::string_view deviceForBoard(std::string_view board) {
-  for (const auto& entry : BOARDS) {
-    if (entry.board == board) return entry.device;
-  }
-  return {};
+  const auto entry =
+      std::find_if(BOARDS.begin(), BOARDS.end(), [board](const BoardAsset& asset) { return asset.board == board; });
+  return entry == BOARDS.end() ? std::string_view{} : entry->device;
 }
 
 }  // namespace release_asset_policy
