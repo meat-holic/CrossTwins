@@ -1,9 +1,9 @@
+#include <gtest/gtest.h>
+
 #include <array>
 #include <string>
 #include <string_view>
 #include <utility>
-
-#include <gtest/gtest.h>
 
 #include "ReleaseAssetName.h"
 #include "ReleaseVersion.h"
@@ -30,9 +30,18 @@ TEST(ReleaseVersion, ComparesMajorMinorPatchAndRcNumbers) {
 }
 
 TEST(ReleaseVersion, RejectsMalformedTagsAndOverflow) {
-  constexpr std::array<std::string_view, 12> invalid = {
-      "",          "v",             "2.0",          "2.0.0.1",     "vv2.0.0", "2.0.0-rc",
-      "2.0.0-RC2", "2.0.0-rc2.foo", "2.0.0-rc2.rev", "02.0.0",      "2.0.0-rc02", "4294967296.0.0"};
+  constexpr std::array<std::string_view, 12> invalid = {"",
+                                                        "v",
+                                                        "2.0",
+                                                        "2.0.0.1",
+                                                        "vv2.0.0",
+                                                        "2.0.0-rc",
+                                                        "2.0.0-RC2",
+                                                        "2.0.0-rc2.foo",
+                                                        "2.0.0-rc2.rev",
+                                                        "02.0.0",
+                                                        "2.0.0-rc02",
+                                                        "4294967296.0.0"};
   for (const auto version : invalid) {
     release_version::Version parsed;
     EXPECT_FALSE(release_version::parse(version, parsed)) << version;
@@ -43,8 +52,12 @@ TEST(ReleaseVersion, RejectsMalformedTagsAndOverflow) {
 
 TEST(ReleaseAssetName, MapsOnlySupportedBoardsToOfficialAssets) {
   constexpr std::array<std::pair<std::string_view, std::string_view>, 6> mappings = {{
-      {"x3", "x3-x4"}, {"x4", "x3-x4"}, {"sticky", "sticky"},
-      {"x4pro", "x4pro"}, {"x4c", "x4c"}, {"papermono", "papermono"},
+      {"x3", "x3-x4"},
+      {"x4", "x3-x4"},
+      {"sticky", "sticky"},
+      {"x4pro", "x4pro"},
+      {"x4c", "x4c"},
+      {"papermono", "papermono"},
   }};
   for (const auto& [board, device] : mappings) EXPECT_EQ(release_asset::deviceForBoard(board), device);
   EXPECT_TRUE(release_asset::deviceForBoard("m5paper").empty());

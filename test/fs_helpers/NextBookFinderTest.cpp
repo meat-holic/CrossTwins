@@ -1,10 +1,10 @@
+#include <FsHelpers.h>
+#include <HalStorage.h>
 #include <gtest/gtest.h>
 
 #include <string>
 #include <vector>
 
-#include <FsHelpers.h>
-#include <HalStorage.h>
 #include "NextBookFinder.h"
 
 namespace {
@@ -25,10 +25,8 @@ TEST(NextBookFinder, SortsCandidatesNaturallyAndSkipsEquivalentAliases) {
 }
 
 TEST(NextBookFinder, KeepsOnlyTheFirstCandidatesAfterTheCurrentBook) {
-  test_hal::setEntries({{"Book 10.epub", false},
-                        {"Book 1.10.epub", false},
-                        {"Book 1.2.epub", false},
-                        {"Book 1.02.epub", false}});
+  test_hal::setEntries(
+      {{"Book 10.epub", false}, {"Book 1.10.epub", false}, {"Book 1.2.epub", false}, {"Book 1.02.epub", false}});
 
   const auto books = NextBookFinder::findNextBooks("/Books/Book 1.epub", 2);
   EXPECT_EQ(books, (std::vector<std::string>{"Book 1.2.epub", "Book 1.02.epub"}));
