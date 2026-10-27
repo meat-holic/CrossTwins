@@ -1,0 +1,12 @@
+{
+  "repository": "meat-holic/CrossTwins",
+  "prefix": "crosstwins",
+  "boards": [
+    {"board": "x3", "device": "x3-x4"},
+    {"board": "x4", "device": "x3-x4"},
+    {"board": "sticky", "device": "sticky"},
+    {"board": "x4pro", "device": "x4pro"},
+    {"board": "x4c", "device": "x4c"},
+    {"board": "papermono", "device": "papermono"}
+  ]
+}

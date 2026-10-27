@@ -550,13 +550,13 @@ TEST(ReleaseJsonParser, ConfiguredFirmwareNameMatch) {
       "tag_name": "1.6.1",
       "assets": [
         {"name": "firmware-x4pro.bin", "browser_download_url": "https://legacy", "size": 100},
-        {"name": "crosspoint-1.6.1-sticky.bin", "browser_download_url": "https://sticky", "size": 200},
-        {"name": "crosspoint-1.6.1-x4pro.bin", "browser_download_url": "https://x4pro", "size": 300}
+        {"name": "crosstwins-1.6.1-sticky.bin", "browser_download_url": "https://sticky", "size": 200},
+        {"name": "crosstwins-1.6.1-x4pro.bin", "browser_download_url": "https://x4pro", "size": 300}
       ]
     })";
 
   ReleaseJsonParser p;
-  p.setFirmwareAssetName("crosspoint-1.6.1-x4pro.bin");
+  p.setFirmwareAssetName("crosstwins-1.6.1-x4pro.bin");
   p.feed(json, strlen(json));
 
   EXPECT_TRUE(p.foundFirmware());
@@ -568,13 +568,13 @@ TEST(ReleaseJsonParser, ConfiguredFirmwareNameIsNotOverwrittenBySameSuffix) {
   const char* json = R"({
       "tag_name": "1.6.1",
       "assets": [
-        {"name": "crosspoint-1.6.1-x4pro.bin", "browser_download_url": "https://correct", "size": 100},
-        {"name": "crosspoint-1.6.0-x4pro.bin", "browser_download_url": "https://stale", "size": 200}
+        {"name": "crosstwins-1.6.1-x4pro.bin", "browser_download_url": "https://correct", "size": 100},
+        {"name": "crosstwins-1.6.0-x4pro.bin", "browser_download_url": "https://stale", "size": 200}
       ]
     })";
 
   ReleaseJsonParser p;
-  p.setFirmwareAssetName("crosspoint-1.6.1-x4pro.bin");
+  p.setFirmwareAssetName("crosstwins-1.6.1-x4pro.bin");
   p.feed(json, strlen(json));
 
   EXPECT_TRUE(p.foundFirmware());
@@ -586,12 +586,12 @@ TEST(ReleaseJsonParser, ConfiguredFirmwareNameRejectsDifferentVersion) {
   const char* json = R"({
       "tag_name": "1.6.1",
       "assets": [
-        {"name": "crosspoint-1.6.0-x4pro.bin", "browser_download_url": "https://stale", "size": 200}
+        {"name": "crosstwins-1.6.0-x4pro.bin", "browser_download_url": "https://stale", "size": 200}
       ]
     })";
 
   ReleaseJsonParser p;
-  p.setFirmwareAssetName("crosspoint-1.6.1-x4pro.bin");
+  p.setFirmwareAssetName("crosstwins-1.6.1-x4pro.bin");
   p.feed(json, strlen(json));
 
   EXPECT_FALSE(p.foundFirmware());

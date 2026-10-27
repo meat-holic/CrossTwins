@@ -69,3 +69,11 @@ technical terms when clearest. Code comments must be short and useful after merg
 For every logical change that can affect shipped firmware or its build—including C/C++, build configuration, partitions, code-generation sources, translations, and release scripts—the main agent must complete [firmware-handoff](.agents/skills/firmware-handoff/SKILL.md) before declaring the work ready or making an approved local commit. That skill owns the required checks, four independent reviews, bounded follow-up, and explicit human acceptance of behavior, architecture, and maintenance ownership.
 
 Read-only inquiries, audits, and reviewers do not run implementation handoff. Pure tests, diagnostics, documentation, and host-only Python scripts use a lighter review unless they alter firmware output or its build. Hardware testing remains the human's responsibility and is required before a PR is opened.
+
+## CrossTwins Release Invariants
+
+- Keep the CrossTwins logo from `src/images/logo.svg` in `Logo120.png` and the generated `Logo120.h`; boot and sleep screens must continue to use that bitmap.
+- OTA release lookup must use `meat-holic/CrossTwins`, and its supported device mapping must match `config/release_assets.json`.
+- Public firmware asset names must use the lowercase `crosstwins-` prefix and the device suffixes defined in `config/release_assets.json`.
+- After upstream merges, recheck the CrossTwins logo, OTA repository and version comparison, and public asset naming before merging or releasing.
+- Before publishing a release, run the logo and asset-policy generators in `--check` mode, OTA/version host tests, the complete host test suite, and required device builds; verify the Actions artifacts, source commit, and SHA-256 manifest.

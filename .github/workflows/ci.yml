@@ -2,13 +2,31 @@ name: CI (build)
 
 on:
   push:
-    branches: [develop]
+    branches: [develop, 'release/**']
   pull_request:
 
 permissions:
   contents: read
 
 jobs:
+  brand-release-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+
+      - name: Install logo conversion dependency
+        run: python -m pip install 'Pillow==12.3.0'
+
+      - name: Verify generated CrossTwins logo and shared asset policy
+        run: |
+          python scripts/generate_logo_1bpp.py --check
+          python scripts/generate_release_asset_policy.py --check
+          python test/test_release_asset_policy.py
+
   clang-format:
     runs-on: ubuntu-latest
     steps:
@@ -83,25 +101,27 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Short board-specific names keep pull-request artifacts easy to identify.
-        # The release workflow applies the published crosspoint-<version>-<device>.bin names.
+        # The five public device assets use the same names as OTA and release builds.
         include:
           - env: default
-            asset: firmware.bin
+            device: x3-x4
           - env: sticky
-            asset: firmware-sticky.bin
+            device: sticky
           - env: x4pro
-            asset: firmware-x4pro.bin
+            device: x4pro
           - env: x4c
-            asset: firmware-x4c.bin
+            device: x4c
           - env: papermono
-            asset: firmware-papermono.bin
+            device: papermono
           - env: metalio_eink4
             asset: firmware-metalio_eink4.bin
+            device: ''
           - env: eego_a4
             asset: firmware-eego_a4.bin
+            device: ''
           - env: picco
             asset: firmware-picco.bin
+            device: ''
     steps:
       - uses: actions/checkout@v6
         with:
@@ -168,11 +188,67 @@ jobs:
             if [ -n "$flash_line" ]; then echo "- ${flash_line}"; else echo "- Flash: not found"; fi
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Upload firmware artifact
+      - name: Prepare CrossTwins release asset
+        if: ${{ matrix.device != '' }}
+        id: release_asset
+        env:
+          DEVICE: ${{ matrix.device }}
+          PIO_ENV: ${{ matrix.env }}
+        run: |
+          set -euo pipefail
+          version="$(sed -n 's/^version = //p' platformio.ini | head -n1)"
+          asset="$(python scripts/release_assets.py name --tag "$version" --device "$DEVICE")"
+          cp ".pio/build/${PIO_ENV}/firmware.bin" "$asset"
+          echo "name=$asset" >> "$GITHUB_OUTPUT"
+
+      - name: Upload CrossTwins release artifact
+        if: ${{ matrix.device != '' }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: ${{ steps.release_asset.outputs.name }}
+          path: ${{ steps.release_asset.outputs.name }}
+          if-no-files-found: error
+
+      - name: Upload other board build artifact
+        if: ${{ matrix.device == '' }}
         uses: actions/upload-artifact@v6
         with:
           name: ${{ matrix.asset }}
           path: .pio/build/${{ matrix.env }}/firmware.bin
+          if-no-files-found: error
+
+  validate-release-assets:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+
+      - name: Download CrossTwins firmware artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: crosstwins-*.bin
+          merge-multiple: true
+
+      - name: Verify names and create SHA-256 manifest
+        run: |
+          set -euo pipefail
+          version="$(sed -n 's/^version = //p' platformio.ini | head -n1)"
+          commit="$(git rev-parse HEAD)"
+          manifest="dist/crosstwins-${version}-manifest.json"
+          python scripts/release_assets.py manifest --tag "$version" --commit "$commit" --assets-dir dist --output "$manifest"
+          python scripts/release_assets.py verify --tag "$version" --commit "$commit" --assets-dir dist --manifest "$manifest"
+          cat "$manifest" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload CrossTwins SHA-256 manifest
+        uses: actions/upload-artifact@v6
+        with:
+          name: crosstwins-${{ github.sha }}-manifest
+          path: dist/crosstwins-*-manifest.json
           if-no-files-found: error
 
   unit-tests:
@@ -208,6 +284,8 @@ jobs:
     name: Test Status
     needs:
       - build
+      - validate-release-assets
+      - brand-release-checks
       - clang-format
       - cppcheck
       - unit-tests

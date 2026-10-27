@@ -1,8 +1,8 @@
-# CrossPoint Reader
+# CrossTwins
 
 [![Fund contributors](https://img.shields.io/badge/%F0%9F%91%91_Fund_contributors-royalty.dev-BB953A?style=for-the-badge&labelColor=1a1a1a)](https://app.royalty.dev/crosspoint-reader/crosspoint-reader)
 
-CrossPoint is open-source e-reader firmware - community-built, fully hackable, free forever. It's maintained by a growing community of developers and readers who believe your device should do what you want - not what a manufacturer decided for you.
+CrossTwins is a Korean-focused CrossPoint Reader firmware fork for supported e-readers. It keeps the reader open and hackable while restoring the CrossTwins logo, OTA update path, and release assets for this project.
 
 ### Now running on:
 
@@ -88,12 +88,12 @@ USB port or browser before assuming the device is locked. Only reach for the unl
 ### Web installer (recommended)
 
 1. Connect your device to your computer via USB-C and wake/unlock the device
-2. Go to https://crosspointreader.com/#flash-tools, select your device (X3, X4, Xteink X4Pro, Seeed reTerminal Sticky, or M5PaperMono), and choose an official CrossPoint release.
+2. Go to https://crosspointreader.com/#flash-tools, select your device (X3, X4, Xteink X4Pro, Seeed reTerminal Sticky, or M5PaperMono), then use **Custom .bin** to upload the matching firmware from the [CrossTwins releases page](https://github.com/meat-holic/CrossTwins/releases/latest).
 
 ### Web installer (specific version)
 
 1. Connect your device to your computer via USB-C and wake/unlock the device
-2. Download the firmware file for your device from [Releases](https://github.com/crosspoint-reader/crosspoint-reader/releases), or compile yourself.
+2. Download the `crosstwins-<version>-<device>.bin` file for your device from [CrossTwins Releases](https://github.com/meat-holic/CrossTwins/releases), or compile yourself.
 3. Go to https://crosspointreader.com/#flash-tools, select your device, click "Custom .bin" and upload the firmware file.
 
 ### Revert to Official Firmware
@@ -108,7 +108,7 @@ To revert to the official firmware, you can also flash the latest official firmw
 pip install esptool
 ```
 
-2. Download the firmware file for your device from the [releases page](https://github.com/crosspoint-reader/crosspoint-reader/releases).
+2. Download the `crosstwins-<version>-<device>.bin` firmware file for your device from the [CrossTwins releases page](https://github.com/meat-holic/CrossTwins/releases/latest).
 3. Connect your device via USB-C.
 4. Find the device port. On Linux, run `dmesg` after connecting. On macOS:
 

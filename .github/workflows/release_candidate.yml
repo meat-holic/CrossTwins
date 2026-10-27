@@ -84,10 +84,10 @@ jobs:
           fi
           echo "BRANCH_SUFFIX=${branch_suffix}" >> "$GITHUB_ENV"
 
-      - name: Build CrossPoint Release Candidate
-        env:
-          CROSSPOINT_RC_HASH: ${{ env.SHORT_SHA }}
-        run: pio run -e ${{ matrix.pio_env }} -j1
+      - name: Build CrossTwins Release Candidate
+        run: |
+          version="$(sed -n 's/^version = //p' platformio.ini | head -n1)"
+          CROSSPOINT_RELEASE_VERSION="$version" pio run -e ${{ matrix.pio_env }} -j1
 
       - name: Name release asset
         run: |
@@ -99,7 +99,7 @@ jobs:
       - name: Upload Artifacts
         uses: actions/upload-artifact@v6
         with:
-          name: CrossPoint-RC-${{ env.BRANCH_SUFFIX }}-${{ matrix.pio_env }}
+          name: CrossTwins-RC-${{ env.BRANCH_SUFFIX }}-${{ matrix.pio_env }}
           path: |
             .pio/build/${{ matrix.pio_env }}/bootloader.bin
             .pio/build/${{ matrix.pio_env }}/${{ matrix.asset }}
