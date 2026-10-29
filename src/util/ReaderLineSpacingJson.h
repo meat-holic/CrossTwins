@@ -13,7 +13,8 @@ enum class WebRequestState : uint8_t { MISSING, VALID, INVALID };
 inline void writeJson(JsonDocument& doc, const uint8_t value) { doc["lineHeight"] = value; }
 
 // Returns true when a legacy value was consumed and the settings document needs resaving.
-inline bool readJson(const JsonVariantConst doc, uint8_t& value, const uint8_t optionCount, const uint8_t defaultValue) {
+inline bool readJson(const JsonVariantConst doc, uint8_t& value, const uint8_t optionCount,
+                     const uint8_t defaultValue) {
   const auto current = doc["lineHeight"];
   if (!current.isUnbound()) {
     if (!current.is<uint8_t>()) {

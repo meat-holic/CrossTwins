@@ -20,7 +20,7 @@ FetchContent_Declare(
 FetchContent_Declare(
   ArduinoJson
   GIT_REPOSITORY https://github.com/bblanchon/ArduinoJson.git
-  GIT_TAG 7.4.2
+  GIT_TAG v7.4.2
   GIT_SHALLOW TRUE
 )
 
