@@ -55,6 +55,7 @@
 #include "util/FirmwareIdentity.h"
 #include "util/PluginHttp.h"
 #include "util/PluginLocations.h"
+#include "util/ReaderLineSpacingJson.h"
 #include "util/TaskWatchdog.h"
 
 static void sendStaticContent(WebServer* server, const char* data, size_t len, const char* etag,
@@ -1469,10 +1470,15 @@ void CrossPointWebServer::handlePostSettings() {
   DictionaryRegistry::discover(dictionaries);
   const auto& settings = getSettingsList(&sdFontSystem.registry(), &dictionaries);
   int applied = 0;
+  uint8_t lineHeightValue = 0;
+  const auto lineHeightRequest = reader_line_spacing::readWebRequest(doc.as<JsonVariantConst>(), lineHeightValue,
+                                                                     CrossPointSettings::LINE_COMPRESSION_COUNT);
 
   for (const auto& s : settings) {
     if (!s.key || s.webHidden) continue;
-    if (!doc[s.key].is<JsonVariant>()) continue;
+    const bool isLineHeight = strcmp(s.key, "lineHeight") == 0;
+    if (isLineHeight ? lineHeightRequest != reader_line_spacing::WebRequestState::VALID : !doc[s.key].is<JsonVariant>())
+      continue;
 
     switch (s.type) {
       case SettingType::TOGGLE: {
@@ -1484,7 +1490,7 @@ void CrossPointWebServer::handlePostSettings() {
         break;
       }
       case SettingType::ENUM: {
-        const int val = doc[s.key].as<int>();
+        const int val = isLineHeight ? lineHeightValue : doc[s.key].as<int>();
         const int maxVal = s.enumStringValues.empty() ? static_cast<int>(s.enumLabels().size())
                                                       : static_cast<int>(s.enumStringValues.size());
         if (val >= 0 && val < maxVal) {

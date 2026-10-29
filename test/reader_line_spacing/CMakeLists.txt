@@ -1,0 +1,9 @@
+add_executable(ReaderLineSpacingMigrationTest ReaderLineSpacingMigrationTest.cpp)
+target_include_directories(ReaderLineSpacingMigrationTest PRIVATE ${REPO_ROOT}/src)
+target_link_libraries(ReaderLineSpacingMigrationTest PRIVATE crosspoint_test_common GTest::gtest_main)
+gtest_discover_tests(ReaderLineSpacingMigrationTest)
+
+add_executable(CrossPointSettingsJsonTest CrossPointSettingsJsonTest.cpp)
+target_include_directories(CrossPointSettingsJsonTest PRIVATE ${REPO_ROOT}/src)
+target_link_libraries(CrossPointSettingsJsonTest PRIVATE crosspoint_test_common GTest::gtest_main ArduinoJson)
+gtest_discover_tests(CrossPointSettingsJsonTest)

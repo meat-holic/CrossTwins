@@ -18,6 +18,7 @@
 #include "fontIds.h"
 #include "util/ParagraphIndentMigration.h"
 #include "util/PluginLocations.h"
+#include "util/ReaderLineSpacingJson.h"
 
 namespace {
 
@@ -70,6 +71,7 @@ void CrossPointSettings::toJson(JsonDocument& doc) const {
 
   auto visit = [&](const SettingInfo& info) {
     if (!info.key) return;
+    if (info.valuePtr == &CrossPointSettings::lineSpacing) return;
     // Dynamic entries (KOReader etc.) are stored in their own files — skip.
     if (!info.valuePtr && !info.stringOffset) return;
 
@@ -87,6 +89,7 @@ void CrossPointSettings::toJson(JsonDocument& doc) const {
     }
   };
   forEachBaseSetting(visit);
+  reader_line_spacing::writeJson(doc, s.lineSpacing);
 
   // Front button remap — managed by RemapFrontButtons sub-activity, not in SettingsList.
   doc["frontButtonBack"] = frontButtonBack;
@@ -133,6 +136,7 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
 
   auto visit = [&](const SettingInfo& info) {
     if (!info.key) return;
+    if (info.valuePtr == &CrossPointSettings::lineSpacing) return;
     // Dynamic entries (KOReader etc.) are stored in their own files — skip.
     if (!info.valuePtr && !info.stringOffset) return;
 
@@ -192,6 +196,7 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
     }
   };
   forEachBaseSetting(visit);
+  needsResave |= reader_line_spacing::readJson(doc, lineSpacing, LINE_COMPRESSION_COUNT, LINE_SPACING_120);
 
   // Plugin System did not exist in older settings files. Preserve the behavior
   // of users who already have SD plugins installed, while keeping the new
