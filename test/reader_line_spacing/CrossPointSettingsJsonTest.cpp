@@ -31,6 +31,7 @@ TEST(CrossPointSettingsLineSpacingJson, CurrentKeySurvivesJsonRoundTrip) {
     EXPECT_EQ(restored, expected);
   }
 }
+
 TEST(CrossPointSettingsLineSpacingJson, CurrentKeyTakesPriorityOverLegacyKey) {
   JsonDocument document;
   ASSERT_FALSE(deserializeJson(document, R"({"lineHeight":4,"lineSpacing":1})"));
@@ -98,4 +99,3 @@ TEST(CrossPointSettingsLineSpacingJson, WebRequestRejectsMalformedCurrentKeyWith
     EXPECT_EQ(value, DEFAULT_VALUE);
   }
 }
-
