@@ -4,7 +4,16 @@ Build and run:
 
   cmake -S test -B build/test
   cmake --build build/test
-  ctest --test-dir build/test --output-on-failure -j
+
+On Windows, use the test runner so compiler runtime DLLs and Python subprocesses
+share the selected host toolchain environment:
+
+  .\test\run_host_tests.ps1 -BuildDir build\test
+
+On other platforms:
+
+  cd build/test
+  ctest --output-on-failure -j
 
 Run a single suite directly:
 

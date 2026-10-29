@@ -4,6 +4,7 @@
 #include <GfxRenderer.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <array>
 #include <cstring>
 #include <filesystem>
@@ -210,7 +211,9 @@ TEST_F(ChapterHtmlSlimParserTest, AbandonedLayoutStopsExtractingLines) {
 class ParserStopTest : public ChapterHtmlSlimParserTest {};
 
 TEST_P(ParserStopTest, PageCallbackStopsParsingAndClosesFile) {
-  filepath = (std::filesystem::temp_directory_path() / "crosspoint-parser-stop.xhtml").string();
+  std::string testName = testing::UnitTest::GetInstance()->current_test_info()->name();
+  std::replace(testName.begin(), testName.end(), '/', '-');
+  filepath = (std::filesystem::temp_directory_path() / ("crosspoint-parser-stop-" + testName + ".xhtml")).string();
   std::string html = "<html><body>";
   for (int i = 0; i < 100; ++i) html += GetParam();
   html += "</body></html>";
@@ -648,6 +651,29 @@ TEST_F(ChapterTightSpacingTest, FontSizeLineSpacingKeepsLastLineInsidePage) {
       EXPECT_LE(element->yPos + GLYPH_HEIGHT, parser.viewportHeight);
       if (previousY >= 0) {
         EXPECT_EQ(element->yPos - previousY, 23);
+        checkedSpacing = true;
+      }
+      previousY = element->yPos;
+    }
+  }
+  EXPECT_TRUE(checkedSpacing);
+}
+
+TEST_F(ChapterTightSpacingTest, OneHundredPercentLineHeightKeepsGlyphsInsidePage) {
+  parser.lineCompression = 1.0f;
+  open("p", nullptr);
+  text(words(80));
+  close("p");
+  ASSERT_TRUE(parser.finishParse());
+  ASSERT_GE(pages.size(), 2u);
+  bool checkedSpacing = false;
+  for (const auto& page : pages) {
+    int previousY = -1;
+    for (const auto& element : page->elements) {
+      if (element->getTag() != TAG_PageLine) continue;
+      EXPECT_LE(element->yPos + GLYPH_HEIGHT, parser.viewportHeight);
+      if (previousY >= 0) {
+        EXPECT_EQ(element->yPos - previousY, 25);
         checkedSpacing = true;
       }
       previousY = element->yPos;

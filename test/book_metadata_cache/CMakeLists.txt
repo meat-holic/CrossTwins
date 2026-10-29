@@ -18,4 +18,10 @@ target_link_libraries(BookMetadataCacheTest PRIVATE
   GTest::gtest_main
 )
 
+# This test replaces global new/delete with a counting allocator. Keep those
+# hooks and the C++ runtime in one image on MinGW-family Windows hosts.
+if(WIN32 AND MINGW)
+  target_link_options(BookMetadataCacheTest PRIVATE -static)
+endif()
+
 gtest_discover_tests(BookMetadataCacheTest)

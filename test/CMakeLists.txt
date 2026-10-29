@@ -17,10 +17,18 @@ FetchContent_Declare(
   GIT_TAG v1.17.0
 )
 
+FetchContent_Declare(
+  ArduinoJson
+  GIT_REPOSITORY https://github.com/bblanchon/ArduinoJson.git
+  GIT_TAG 7.4.2
+  GIT_SHALLOW TRUE
+)
+
 set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
 set(INSTALL_GTEST OFF CACHE BOOL "" FORCE)
 set(BUILD_GMOCK OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(googletest)
+FetchContent_MakeAvailable(ArduinoJson)
 
 set(REPO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/..")
 
@@ -37,6 +45,39 @@ target_compile_options(crosspoint_test_common INTERFACE
 
 enable_testing()
 include(GoogleTest)
+
+# GoogleTest discovery and CTest execute test binaries directly. On Windows,
+# MinGW-family test executables need the runtime DLLs shipped beside the
+# selected compiler. Reuse that exact toolchain directory for both steps.
+if(WIN32)
+  get_filename_component(CROSSPOINT_HOST_RUNTIME_DIR "${CMAKE_CXX_COMPILER}" DIRECTORY)
+  set(_crosspoint_host_runtime_dlls
+    libc++.dll
+    libunwind.dll
+    libstdc++-6.dll
+    libgcc_s_seh-1.dll
+    libgcc_s_dw2-1.dll
+    libwinpthread-1.dll
+  )
+  set(_crosspoint_host_has_runtime_dll FALSE)
+  foreach(_runtime_dll IN LISTS _crosspoint_host_runtime_dlls)
+    if(EXISTS "${CROSSPOINT_HOST_RUNTIME_DIR}/${_runtime_dll}")
+      set(_crosspoint_host_has_runtime_dll TRUE)
+      break()
+    endif()
+  endforeach()
+  if(_crosspoint_host_has_runtime_dll)
+    if(NOT CMAKE_CROSSCOMPILING_EMULATOR)
+      set(CMAKE_CROSSCOMPILING_EMULATOR
+        "${CMAKE_COMMAND};-E;env;PATH=${CROSSPOINT_HOST_RUNTIME_DIR}"
+      )
+    endif()
+  endif()
+  unset(_crosspoint_host_runtime_dlls)
+  unset(_crosspoint_host_has_runtime_dll)
+  unset(_runtime_dll)
+  unset(CROSSPOINT_HOST_RUNTIME_DIR)
+endif()
 
 add_subdirectory(streaming_json_parser)
 add_subdirectory(release_json_parser)
@@ -62,6 +103,7 @@ add_subdirectory(book_progress_snapshot)
 add_subdirectory(font_cache_manager)
 add_subdirectory(css_parser)
 add_subdirectory(chapter_html_slim_parser)
+add_subdirectory(reader_line_spacing)
 add_subdirectory(korean_line_breaking)
 add_subdirectory(em_dash_line_breaking)
 add_subdirectory(ligature_guard)
@@ -98,6 +140,7 @@ add_test(NAME TrustedTimeTimezone COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_
 add_test(NAME RemoteButtonInputIntegration COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_remote_button_input.py)
 add_test(NAME confirmation_translations COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_confirmation_translations.py)
 add_test(NAME i18n_builtin_languages COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_i18n_builtin_languages.py)
+add_test(NAME patch_wolfssl COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_patch_wolfssl.py)
 add_test(NAME BleLearning COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_ble_learning.py)
 add_subdirectory(ble_link_note_title)
 add_subdirectory(ble_chapter_build_gate)
