@@ -18,13 +18,19 @@ OVERRIDES = f"""
    heap, and TLS cert verification allocates dozens at once. */
 #undef FP_MAX_BITS
 #define FP_MAX_BITS 8192
+/* SecureClient enables wolfSSL tracing only for explicit debug builds. Keep
+   the trace out of ordinary firmware while preserving FREEINK_WOLFSSL_DEBUG. */
+#ifndef FREEINK_WOLFSSL_DEBUG
+#undef DEBUG_WOLFSSL
+#endif
 """
 
 
 def patch_user_settings(path: Path) -> None:
     text = path.read_text()
     if MARKER in text:
-        text = text.split(MARKER, 1)[0].rstrip()
+        text = text.split(MARKER, 1)[0]
+    text = text.rstrip()
     path.write_text(text + OVERRIDES + "\n")
     print(f"Patched wolfSSL settings: {path.relative_to(PROJECT_DIR)}")
 
