@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Render the approved embedded-PNG SVG into the firmware's 1bpp logo."""
+"""Render and orient the approved SVG for the firmware's raw 1bpp image blit."""
 
 from __future__ import annotations
 
@@ -71,7 +71,15 @@ def render() -> Image.Image:
     canvas = Image.new("RGBA", (SIZE, SIZE), (255, 255, 255, 255))
     canvas.alpha_composite(resized, (x, y))
     grayscale = canvas.convert("L")
-    return grayscale.point(lambda value: 255 if value >= THRESHOLD else 0, mode="L")
+    bilevel = grayscale.point(lambda value: 255 if value >= THRESHOLD else 0, mode="L")
+    return bilevel
+
+
+def firmware_image(image: Image.Image) -> Image.Image:
+    # GfxRenderer rotates Portrait coordinates but drawImage leaves bitmap pixels
+    # in panel axes. Counter-rotate only the firmware bitmap so the SVG/PNG stay
+    # upright for documents and other consumers.
+    return image.transpose(Image.Transpose.ROTATE_90)
 
 
 def header_content(image: Image.Image) -> str:
@@ -106,7 +114,7 @@ def main() -> int:
     args = parser.parse_args()
     try:
         image = render()
-        expected_header = header_content(image)
+        expected_header = header_content(firmware_image(image))
         if args.check:
             if not PNG_PATH.exists() or not HEADER_PATH.exists():
                 raise ValueError("generated logo PNG or header is missing")
@@ -116,7 +124,7 @@ def main() -> int:
                     raise ValueError("Logo120.png pixels do not match the approved SVG")
             if HEADER_PATH.read_text(encoding="utf-8") != expected_header:
                 raise ValueError("Logo120.h is stale or does not match the approved SVG")
-            print("Logo SVG, PNG, and 1bpp firmware bitmap match")
+            print("Logo SVG/PNG and oriented 1bpp firmware bitmap verified")
             return 0
 
         image.save(PNG_PATH, format="PNG", optimize=False, compress_level=9)
