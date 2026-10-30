@@ -18,8 +18,9 @@ OVERRIDES = f"""
    heap, and TLS cert verification allocates dozens at once. */
 #undef FP_MAX_BITS
 #define FP_MAX_BITS 8192
-/* SecureClient enables wolfSSL tracing only for explicit debug builds. Keep
-   the trace out of ordinary firmware while preserving FREEINK_WOLFSSL_DEBUG. */
+/* Arduino-wolfSSL defines DEBUG_WOLFSSL by default, but SecureClient enables
+   tracing only for explicit debug builds. Keep it out of ordinary firmware
+   while preserving FREEINK_WOLFSSL_DEBUG across all sources. */
 #ifndef FREEINK_WOLFSSL_DEBUG
 #undef DEBUG_WOLFSSL
 #endif
