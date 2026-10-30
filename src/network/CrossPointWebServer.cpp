@@ -23,6 +23,7 @@
 #include <base64.h>
 #include <esp_efuse.h>
 #include <esp_efuse_table.h>
+#include <esp_random.h>
 #include <wolfssl/wolfcrypt/aes.h>
 #include <wolfssl/wolfcrypt/hash.h>
 
@@ -32,6 +33,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <string_view>
+#include <utility>
 
 #include "ClippingStore.h"
 #include "CrossPointSettings.h"
@@ -59,6 +61,7 @@
 #include "util/PluginLocations.h"
 #include "util/ReaderLineSpacingJson.h"
 #include "util/TaskWatchdog.h"
+#include "util/UploadStagingPath.h"
 
 static void sendStaticContent(WebServer* server, const char* data, size_t len, const char* etag,
                               const char* contentType);
@@ -809,9 +812,9 @@ static String uploadDestPath(const CrossPointWebServer::UploadState& state) {
   return filePath;
 }
 
-// The path being written: the destination itself, or "<dest>.part" while overwriting.
+// The path being written: the destination itself, or this upload's unique stage.
 static String uploadWritePath(const CrossPointWebServer::UploadState& state) {
-  return state.staged ? uploadDestPath(state) + ".part" : uploadDestPath(state);
+  return state.staged ? String(state.stagedPath.get()) : uploadDestPath(state);
 }
 
 // Drop a partially written upload so a truncated book never lands in the library.
@@ -843,6 +846,7 @@ void CrossPointWebServer::handleUpload(UploadState& state) const {
     state.success = false;
     state.error = "";
     state.staged = false;
+    state.stagedPath.reset();
     uploadStartTime = millis();
     lastLoggedSize = 0;
     state.bufferPos = 0;
@@ -892,6 +896,21 @@ void CrossPointWebServer::handleUpload(UploadState& state) const {
         return;
       }
       existing.close();
+      const size_t pathCapacity = filePath.length() + upload_staging::MAX_SUFFIX_LENGTH + 1;
+      auto stagedPath = makeUniqueNoThrow<char[]>(pathCapacity);
+      if (!stagedPath) {
+        state.error = tr(STR_MEMORY_ERROR);
+        LOG_ERR("WEB", "OOM: upload staging path");
+        return;
+      }
+      if (!upload_staging::selectPath(
+              filePath.c_str(), esp_random(), [](const char* candidate) { return Storage.exists(candidate); },
+              stagedPath.get(), pathCapacity)) {
+        state.error = "Failed to select a unique upload staging file";
+        LOG_ERR("WEB", "Could not select a unique staging path for %s", filePath.c_str());
+        return;
+      }
+      state.stagedPath = std::move(stagedPath);
       state.staged = true;
     }
 
@@ -972,7 +991,7 @@ void CrossPointWebServer::handleUpload(UploadState& state) const {
           // replaceFile removes the original before the rename: if it is gone,
           // the staged copy is the only one left, so keep it.
           keepStaged = !Storage.exists(dest.c_str());
-          state.error = keepStaged ? "Replace failed; the new file is kept as " + state.fileName + ".part"
+          state.error = keepStaged ? "Replace failed; the new file is kept as " + String(state.stagedPath.get())
                                    : "Failed to replace the existing file";
           if (keepStaged) {
             // The original is gone: drop its cache and Library entry.

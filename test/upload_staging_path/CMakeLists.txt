@@ -1,0 +1,4 @@
+add_executable(UploadStagingPathTest UploadStagingPathTest.cpp)
+target_include_directories(UploadStagingPathTest PRIVATE ${REPO_ROOT}/src)
+target_link_libraries(UploadStagingPathTest PRIVATE crosspoint_test_common GTest::gtest_main)
+gtest_discover_tests(UploadStagingPathTest)

@@ -16,6 +16,7 @@
 #include "PluginLocations.h"
 #include "components/UITheme.h"
 #include "network/ProtectedPaths.h"
+#include "util/PluginEventMetadata.h"
 
 namespace {
 
@@ -110,15 +111,14 @@ void refreshSubscriptions() {
         LOG_DBG("PEVT", "%s: unknown event '%s' ignored", entry.name.c_str(), kv.key().c_str());
         continue;
       }
-      // A filter that is not a string must not fall back to "every book".
-      JsonVariantConst requireMeta = kv.value()["require_meta"];
-      if (!requireMeta.isNull() && !requireMeta.is<const char*>()) {
+      // A present filter that is not a string must not fall back to "every book".
+      const char* requiredMeta = nullptr;
+      if (!pluginevents::detail::readRequiredMeta(kv.value(), requiredMeta)) {
         LOG_ERR("PEVT", "%s: %s require_meta is not a string; handler ignored", entry.name.c_str(), kv.key().c_str());
         continue;
       }
       mask |= static_cast<uint8_t>(1u << e);
       if (kv.value()["connect"] | false) connectMask |= static_cast<uint8_t>(1u << e);
-      const char* requiredMeta = requireMeta | "";
       if (requiredMeta[0] != '\0') metaHashes[e] = metaKeyHash(requiredMeta);
     }
     // sleep.enter exists to act before the chip powers down (sleep image,
