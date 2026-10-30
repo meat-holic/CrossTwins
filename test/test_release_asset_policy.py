@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sys
 import tempfile
 import unittest
@@ -91,6 +92,17 @@ class ReleaseAssetPolicyTests(unittest.TestCase):
         for language in ("english", "korean"):
             contents = (ROOT / "lib/I18n/translations" / f"{language}.yaml").read_text(encoding="utf-8")
             self.assertIn('STR_CROSSTWINS: "CrossTwins"', contents)
+
+    def test_firmware_display_version_matches_configured_release(self) -> None:
+        platformio = (ROOT / "platformio.ini").read_text(encoding="utf-8")
+        version_line = next(line for line in platformio.splitlines() if line.startswith("version = "))
+        configured_version = version_line.removeprefix("version = ").strip()
+        display_version = re.sub(r"-rc([0-9]+)(?:\.rev\.[0-9]+)?$", r"-RC\1", configured_version)
+        header = (ROOT / "src/FirmwareVersion.h").read_text(encoding="utf-8")
+        match = re.search(r'^#define CROSSTWINS_VERSION_DISPLAY "([^"]+)"$', header, re.MULTILINE)
+
+        self.assertIsNotNone(match, "Firmware display version is missing")
+        self.assertEqual(match.group(1), f"CrossTwins {display_version}")
 
 
 if __name__ == "__main__":
