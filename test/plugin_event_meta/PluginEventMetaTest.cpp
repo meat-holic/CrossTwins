@@ -32,8 +32,8 @@ TEST(PluginEventMeta, ExplicitNullDoesNotDisableFilterValidation) {
 }
 
 TEST(PluginEventMeta, OtherNonStringFiltersAreRejected) {
-  for (const char* json : {R"({"require_meta":1})", R"({"require_meta":false})", R"({"require_meta":[]})",
-                           R"({"require_meta":{}})"}) {
+  for (const char* json :
+       {R"({"require_meta":1})", R"({"require_meta":false})", R"({"require_meta":[]})", R"({"require_meta":{}})"}) {
     JsonDocument document;
     ASSERT_FALSE(deserializeJson(document, json));
 
