@@ -55,8 +55,7 @@ harness = r"""
 #include <FreeInkApp.h>
 #include <BoardConfig.h>
 #include <EpdFont.h>
-#include <builtinFonts/ubuntu_10_regular.h>
-#include <builtinFonts/ubuntu_12_regular.h>
+#include <builtinFonts/pretendard_10_regular.h>
 #include <components/themes/lyra/LyraTheme.h>
 #include <components/themes/roundedraff/RoundedRaffTheme.h>
 #include <algorithm>
@@ -79,12 +78,12 @@ struct GfxRenderer {
   int getScreenHeight() const;
   Orientation getOrientation() const { return orientation; }
   void getOrientedViewableTRBL(int*, int*, int*, int*) const;
-  int getTextHeight(int) const { return ubuntu_10_regular.ascender; }
+  int getTextHeight(int) const { return pretendard_10_regular.ascender; }
   void drawText(int, int x, int y, const char* text) const {
-    EpdFont font(&ubuntu_10_regular);
+    EpdFont font(&pretendard_10_regular);
     int width, height;
     font.getTextDimensions(text, &width, &height);
-    caption = Rect{x, y, width, ubuntu_10_regular.advanceY};
+    caption = Rect{x, y, width, pretendard_10_regular.advanceY};
     captionText = text;
   }
   std::array<int, 4> getClipRect() const { return clip; }
@@ -173,13 +172,13 @@ struct Target : fui::GfxRendererTarget {
   fui::Rect clipRect() const override { return clip; }
   bool setClipRect(fui::Rect rect) override { clip = rect; return true; }
   fui::Size measureText(fui::FontId font, const char* text, fui::TextStyle) const override {
-    EpdFont epdFont(font == 0 ? &ubuntu_10_regular : &ubuntu_12_regular);
+    EpdFont epdFont(&pretendard_10_regular);
     int width, height;
     epdFont.getTextDimensions(text, &width, &height);
     return {static_cast<int16_t>(width), lineHeight(font)};
   }
   int16_t lineHeight(fui::FontId font) const override {
-    return font == 0 ? ubuntu_10_regular.advanceY : ubuntu_12_regular.advanceY;
+    return pretendard_10_regular.advanceY;
   }
   void fill(fui::Rect rect, fui::Paint, uint8_t, uint8_t) override { fills.push_back(rect); }
   void stroke(fui::Rect, fui::Paint, uint8_t, uint8_t, uint8_t) override {}

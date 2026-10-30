@@ -5,6 +5,7 @@
 #include <Logging.h>
 
 #include <algorithm>
+#include <cstdlib>
 #include <cstring>
 
 struct ZipInflateCtx {

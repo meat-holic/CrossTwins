@@ -10,6 +10,7 @@
 #include <set>
 #include <string>
 #include <tuple>
+#include <vector>
 
 namespace BidiUtils {
 enum class BidiBaseDir : signed char { AUTO = -1, LTR = 0, RTL = 1 };
