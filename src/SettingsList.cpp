@@ -29,6 +29,8 @@ void forEachBaseSetting(SettingVisitor visit, void* context) {
     values[CrossPointSettings::STATUS_BAR_CLOCK_LEFT] = StrId::STR_DIR_LEFT;
     return values;
   }();
+  static constexpr std::array<StrId, CrossPointSettings::UI_FONT_MODE_COUNT> UI_FONT_MODE_VALUES = {
+      StrId::STR_FONT_DEFAULT, StrId::STR_FONT_SD_CARD};
 
   const auto emit = [visit, context](auto&& info) { visit(context, info); };
   // --- Display ---
@@ -50,6 +52,8 @@ void forEachBaseSetting(SettingVisitor visit, void* context) {
                           StrId::STR_PAGES_30, StrId::STR_NEVER},
                          "refreshFrequency", StrId::STR_CAT_DISPLAY));
   emit(buildHomeThemeSetting());
+  emit(SettingInfo::StaticEnum(StrId::STR_UI_FONT, &CrossPointSettings::uiFontMode, UI_FONT_MODE_VALUES, "uiFontMode",
+                               StrId::STR_CAT_DISPLAY));
   if (!BoardConfig::hasTouch())
     emit(SettingInfo::Toggle(StrId::STR_SUNLIGHT_FADING_FIX, &CrossPointSettings::fadingFix, "fadingFix",
                              StrId::STR_CAT_DISPLAY));

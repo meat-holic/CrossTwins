@@ -146,6 +146,34 @@ What this means in practice:
   fallback and the UI again shows boxes for non-Latin text — pick an SD font
   covering that script to restore it.
 
+## Global UI Font
+
+**Settings > Display > UI Font** selects either the built-in UI font or an SD
+font. The mode change applies immediately; no reboot is needed. In SD mode, the
+currently selected pre-rasterized SD font family is used for system UI text
+when that family includes an **11 pt `.cpfont`**. If it does not, the built-in
+font remains primary and the existing 10 pt script fallback can still supply
+non-Latin UI glyphs when that family includes the required file. Direct vector
+`.ttf`/`.otf`/`.ttc` families keep their existing script-fallback behavior and
+are not promoted to the global UI face. The SD family continues to be chosen in
+**Settings > Reader > Text Settings > Reader Font Family**; the UI mode switch
+itself does not change EPUB/TXT font settings or rendering.
+
+The built-in UI face has a 25 px line advance. The 11 pt UI variant is the
+closest metric match for the tested Sam3KRFont builds and matches sampled
+Hangul glyph dimensions from the 23 pt `.epdfont` reference. If an 11 pt SD UI
+font lacks any glyph in a string, that whole string uses the built-in font so
+mixed text does not show holes. This renderer routes complete strings rather
+than mixing fonts per glyph.
+
+When converting a family for both UI and body use, include the 11 pt UI face
+alongside the sizes needed for reading. For example:
+
+    python3 lib/EpdFont/scripts/fontconvert_sdcard.py \
+      Sam3KRFont.ttf --intervals ascii,hangul,cjk \
+      --sizes 10,11,12,14,16,18 --style regular \
+      --name Sam3KRFont --output-dir ./Sam3KRFont/
+
 ## Available Pre-Built Fonts
 
 The current list of pre-built fonts is maintained in the

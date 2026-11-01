@@ -331,9 +331,9 @@ TEST_F(ChapterHtmlSlimParserTest, UnequalTableCellsAndRubySurvivePageBreaks) {
 TEST(ReaderFontSizes, BuiltinVariantsStayInFamilyAndRespectSizeBounds) {
   ASSERT_EQ(std::size(BUILTIN_READER_POINT_SIZES), 1u);
   EXPECT_EQ(BUILTIN_READER_POINT_SIZES[0], 10);
-  EXPECT_EQ(builtinReaderFontVariant(UI_FONT_ID, 1.0f), UI_FONT_ID);
-  EXPECT_EQ(builtinReaderFontVariant(UI_FONT_ID, 0.5f), UI_FONT_ID);
-  EXPECT_EQ(builtinReaderFontVariant(UI_FONT_ID, 3.0f), UI_FONT_ID);
+  EXPECT_EQ(builtinReaderFontVariant(BUILTIN_READER_FONT_ID, 1.0f), BUILTIN_READER_FONT_ID);
+  EXPECT_EQ(builtinReaderFontVariant(BUILTIN_READER_FONT_ID, 0.5f), BUILTIN_READER_FONT_ID);
+  EXPECT_EQ(builtinReaderFontVariant(BUILTIN_READER_FONT_ID, 3.0f), BUILTIN_READER_FONT_ID);
   EXPECT_EQ(builtinReaderFontVariant(12345, 2.0f), 0);
 }
 

@@ -38,6 +38,9 @@ class SdCardFontSystem {
   /// Also re-discovers if the registry has been marked dirty (e.g. by web upload).
   void ensureLoaded(GfxRenderer& renderer);
 
+  /// Apply the persisted global UI font mode to the current SD font family.
+  void applyUiFontMode(GfxRenderer& renderer);
+
   /// Resolve an SD card font ID from family name + reader point size.
   /// Returns 0 if not found. Used by CrossPointSettings::getReaderFontId().
   int resolveFontId(const char* familyName, uint8_t pointSize) const;
@@ -69,6 +72,10 @@ class SdCardFontSystem {
   // family is loaded. Safe to call repeatedly (sizes already loaded are
   // reused).
   void setupUiFallbacks(GfxRenderer& renderer);
+  void setupUiScriptFallbacks(GfxRenderer& renderer);
+  void setupUiPrimaryFont(GfxRenderer& renderer);
+  void clearUiPrimaryFont(GfxRenderer& renderer);
+  void clearUiScriptFallback(GfxRenderer& renderer);
 
 #if CROSSPOINT_VECTOR_FONTS
   // --- Vector (.ttf/.otf) font path (FreeInkFont via TtfEpdFont) -------------
@@ -111,6 +118,10 @@ class SdCardFontSystem {
   std::vector<CpfontVariant> cpfontVariants_;
   uint32_t variantClock_ = 0;
   GfxRenderer* renderer_ = nullptr;
+  int uiPrimaryFontId_ = 0;
+  bool uiPrimaryFontOwned_ = false;
+  int uiFallbackFontId_ = 0;
+  bool uiFallbackFontOwned_ = false;
 
   SdCardFontRegistry registry_;
   SdCardFontManager manager_;

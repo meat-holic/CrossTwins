@@ -16,6 +16,7 @@
 #include "../Memory/Memory.h"
 #include "FontCacheManager.h"
 #include "GlyphBitmap.h"
+#include "UiFontFallback.h"
 
 namespace {
 // Synthesized small caps: lowercase letters draw as capitals at roughly x-height.
@@ -267,19 +268,49 @@ void GfxRenderer::insertFont(const int fontId, EpdFontFamily font) {
   }
 }
 
-int GfxRenderer::resolveTextFontId(const int fontId, const char* text, const EpdFontFamily::Style style) const {
-  if (fallbackFontMap_.empty() || text == nullptr || *text == '\0') {
-    return fontId;
+int GfxRenderer::resolveUiFontId(const int fontId) const {
+  if (fontId == uiFontAliasId_) {
+    if (uiFontOverrideId_ != 0 && fontMap.count(uiFontOverrideId_) != 0) return uiFontOverrideId_;
+    if (uiFontBaseFontId_ != 0 && fontMap.count(uiFontBaseFontId_) != 0) return uiFontBaseFontId_;
   }
+  return fontId;
+}
+
+int GfxRenderer::resolveUiCodepointFontId(const int fontId, const uint32_t codepoint,
+                                          const EpdFontFamily::Style style) const {
+  if (fontId != uiFontAliasId_ || uiFontOverrideId_ == 0) return resolveUiFontId(fontId);
+  const auto primaryIt = fontMap.find(uiFontOverrideId_);
+  if (primaryIt != fontMap.end() && primaryIt->second.hasCodepoint(codepoint, style)) return uiFontOverrideId_;
+  return uiFontBaseFontId_ != 0 ? uiFontBaseFontId_ : fontId;
+}
+
+int GfxRenderer::resolveTextFontId(const int fontId, const char* text, const EpdFontFamily::Style style) const {
+  if (text == nullptr || *text == '\0') return resolveUiFontId(fontId);
+
+  // When the global UI override lacks any glyph, use the built-in face for
+  // the entire string so mixed text follows one set of layout metrics.
+  if (fontId == uiFontAliasId_ && uiFontOverrideId_ != 0) {
+    const auto overrideFont = fontMap.find(uiFontOverrideId_);
+    const int fallbackFontId = uiFontBaseFontId_ != 0 ? uiFontBaseFontId_ : fontId;
+    if (overrideFont == fontMap.end()) return fallbackFontId;
+    return uiFontFallback::chooseFontId(
+        uiFontOverrideId_, fallbackFontId, text, [this, style](const int candidateId, const uint32_t cp) {
+          const auto candidate = fontMap.find(candidateId);
+          return candidate != fontMap.end() && candidate->second.hasCodepoint(cp, style);
+        });
+  }
+
+  const int baseFontId = resolveUiFontId(fontId);
+  if (fallbackFontMap_.empty()) return baseFontId;
   const auto fbIt = fallbackFontMap_.find(fontId);
   if (fbIt == fallbackFontMap_.end()) {
-    return fontId;  // no fallback registered for this font
+    return baseFontId;  // no fallback registered for this font
   }
   const int fallbackFontId = fbIt->second;
-  const auto fontIt = fontMap.find(fontId);
+  const auto fontIt = fontMap.find(baseFontId);
   const auto fallbackIt = fontMap.find(fallbackFontId);
   if (fontIt == fontMap.end() || fallbackIt == fontMap.end()) {
-    return fontId;  // unknown primary or fallback not loaded — let the caller handle it
+    return baseFontId;  // unknown primary or fallback not loaded — let the caller handle it
   }
   const EpdFontFamily& primary = fontIt->second;
   const EpdFontFamily& fallback = fallbackIt->second;
@@ -296,7 +327,7 @@ int GfxRenderer::resolveTextFontId(const int fontId, const char* text, const Epd
       return fallbackFontId;
     }
   }
-  return fontId;
+  return baseFontId;
 }
 
 void GfxRenderer::prewarmFallbackText(const int fontId, const TextGetter getter, const void* ctx,
@@ -304,17 +335,16 @@ void GfxRenderer::prewarmFallbackText(const int fontId, const TextGetter getter,
   if (getter == nullptr || textCount == 0) {
     return;
   }
-  // Resolve the fallback id from the first string that actually redirects; a
-  // screen with no non-Latin strings resolves nothing and this is a no-op.
-  int fallbackFontId = fontId;
-  for (uint32_t i = 0; i < textCount && fallbackFontId == fontId; i++) {
+  // Find a string routed to an SD font; the logical UI id may resolve to the
+  // built-in base id even when no fallback is needed for that string.
+  int fallbackFontId = 0;
+  for (uint32_t i = 0; i < textCount && fallbackFontId == 0; i++) {
     const char* text = getter(ctx, i);
     if (text == nullptr || *text == '\0') continue;
-    fallbackFontId = resolveTextFontId(fontId, text, style);
+    const int resolvedFontId = resolveTextFontId(fontId, text, style);
+    if (resolvedFontId != fontId && sdCardFonts_.count(resolvedFontId) != 0) fallbackFontId = resolvedFontId;
   }
-  if (fallbackFontId == fontId) {
-    return;
-  }
+  if (fallbackFontId == 0) return;
   const auto sdIt = sdCardFonts_.find(fallbackFontId);
   if (sdIt == sdCardFonts_.end()) {
     return;
@@ -2074,13 +2104,14 @@ bool GfxRenderer::copyBufferToRegion(int lx, int ly, int lw, int lh, const uint8
 }
 
 int GfxRenderer::getSpaceWidth(const int fontId, const EpdFontFamily::Style style) const {
+  const int resolvedFontId = resolveUiCodepointFontId(fontId, ' ', style);
   // Advance table fast-path for SD card fonts during layout
-  auto sdIt = sdCardFonts_.find(fontId);
+  auto sdIt = sdCardFonts_.find(resolvedFontId);
   if (sdIt != sdCardFonts_.end() && sdIt->second->hasAdvanceTable()) {
     return fp4::toPixel(getSdCardSpaceAdvance(*sdIt->second, style));
   }
 
-  const auto fontIt = fontMap.find(fontId);
+  const auto fontIt = fontMap.find(resolvedFontId);
   if (fontIt == fontMap.end()) {
     LOG_ERR("GFX", "Font %d not found", fontId);
     return 0;
@@ -2092,15 +2123,16 @@ int GfxRenderer::getSpaceWidth(const int fontId, const EpdFontFamily::Style styl
 
 int GfxRenderer::getSpaceAdvance(const int fontId, const uint32_t leftCp, const uint32_t rightCp,
                                  const EpdFontFamily::Style style) const {
+  const int resolvedFontId = resolveUiCodepointFontId(fontId, ' ', style);
   // Advance table fast-path for SD card fonts during layout.
   // Kern data is not loaded during layout (consistent with previous metadataOnly behavior),
   // so we return just the space advance without kerning.
-  auto sdIt = sdCardFonts_.find(fontId);
+  auto sdIt = sdCardFonts_.find(resolvedFontId);
   if (sdIt != sdCardFonts_.end() && sdIt->second->hasAdvanceTable()) {
     return fp4::toPixel(getSdCardSpaceAdvance(*sdIt->second, style));
   }
 
-  const auto fontIt = fontMap.find(fontId);
+  const auto fontIt = fontMap.find(resolvedFontId);
   if (fontIt == fontMap.end()) return 0;
   const auto& font = fontIt->second;
   const EpdGlyph* spaceGlyph = font.getGlyph(' ', style);
@@ -2114,7 +2146,8 @@ int GfxRenderer::getSpaceAdvance(const int fontId, const uint32_t leftCp, const 
 
 int GfxRenderer::getKerning(const int fontId, const uint32_t leftCp, const uint32_t rightCp,
                             const EpdFontFamily::Style style, const int8_t tracking) const {
-  const auto fontIt = fontMap.find(fontId);
+  const int resolvedFontId = resolveUiFontId(fontId);
+  const auto fontIt = fontMap.find(resolvedFontId);
   if (fontIt == fontMap.end()) return 0;
   const int kernFP = fontIt->second.getKerning(leftCp, rightCp, style);      // 4.4 fixed-point
   return fp4::toPixel(kernFP) + trackingBetween(leftCp, rightCp, tracking);  // snap 4.4 fixed-point to nearest pixel
@@ -2223,7 +2256,8 @@ int GfxRenderer::getTextAdvanceX(const int fontId, const char* text, EpdFontFami
 
 bool GfxRenderer::getCodepointMetrics(const int fontId, const uint32_t cp, const EpdFontFamily::Style style,
                                       int32_t& advanceFP, int& top) const {
-  const auto fontIt = fontMap.find(fontId);
+  const int resolvedFontId = resolveUiCodepointFontId(fontId, cp, style);
+  const auto fontIt = fontMap.find(resolvedFontId);
   if (fontIt == fontMap.end()) return false;
   const EpdGlyph* glyph = fontIt->second.getGlyph(cp, style);
   if (!glyph) return false;
@@ -2235,13 +2269,14 @@ bool GfxRenderer::getCodepointMetrics(const int fontId, const uint32_t cp, const
 int GfxRenderer::drawScaledCodepoint(const int fontId, const uint32_t cp, const EpdFontFamily::Style style, const int x,
                                      const int baselineY, const int scale256) const {
   if (scale256 <= 0) return 0;
+  const int resolvedFontId = resolveUiCodepointFontId(fontId, cp, style);
   if (fontCacheManager_ && fontCacheManager_->isScanning()) {
     char utf8[5] = {};
     utf8AppendCodepoint(utf8, cp);
-    fontCacheManager_->recordText(utf8, fontId, style);
+    fontCacheManager_->recordText(utf8, resolvedFontId, style);
     return 0;
   }
-  const auto fontIt = fontMap.find(fontId);
+  const auto fontIt = fontMap.find(resolvedFontId);
   if (fontIt == fontMap.end()) return 0;
   const EpdFontFamily& font = fontIt->second;
   const EpdGlyph* glyph = font.getGlyph(cp, style);
@@ -2287,7 +2322,7 @@ int GfxRenderer::drawScaledCodepoint(const int fontId, const uint32_t cp, const 
 }
 
 int GfxRenderer::getFontAscenderSize(const int fontId) const {
-  const auto fontIt = fontMap.find(fontId);
+  const auto fontIt = fontMap.find(resolveUiFontId(fontId));
   if (fontIt == fontMap.end()) {
     LOG_ERR("GFX", "Font %d not found", fontId);
     return 0;
@@ -2297,7 +2332,7 @@ int GfxRenderer::getFontAscenderSize(const int fontId) const {
 }
 
 int GfxRenderer::getLineHeight(const int fontId) const {
-  const auto fontIt = fontMap.find(fontId);
+  const auto fontIt = fontMap.find(resolveUiFontId(fontId));
   if (fontIt == fontMap.end()) {
     LOG_ERR("GFX", "Font %d not found", fontId);
     return 0;
@@ -2307,7 +2342,7 @@ int GfxRenderer::getLineHeight(const int fontId) const {
 }
 
 int GfxRenderer::getLineHeight(const int fontId, const float compression) const {
-  const auto fontIt = fontMap.find(fontId);
+  const auto fontIt = fontMap.find(resolveUiFontId(fontId));
   if (fontIt == fontMap.end()) {
     LOG_ERR("GFX", "Font %d not found", fontId);
     return 0;
@@ -2316,7 +2351,7 @@ int GfxRenderer::getLineHeight(const int fontId, const float compression) const 
 }
 
 int GfxRenderer::getTextHeight(const int fontId) const {
-  const auto fontIt = fontMap.find(fontId);
+  const auto fontIt = fontMap.find(resolveUiFontId(fontId));
   if (fontIt == fontMap.end()) {
     LOG_ERR("GFX", "Font %d not found", fontId);
     return 0;

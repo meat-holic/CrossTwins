@@ -508,7 +508,8 @@ void setupDisplayAndFonts(bool seamless = false) {
   }
   fontCacheManager.setFontDecompressor(&fontDecompressor);
   renderer.setFontCacheManager(&fontCacheManager);
-  renderer.insertFont(UI_FONT_ID, uiFontFamily);
+  renderer.insertFont(BUILTIN_READER_FONT_ID, uiFontFamily);
+  renderer.setFontAlias(UI_FONT_ID, BUILTIN_READER_FONT_ID);
 
   // Discover and load SD card fonts
   sdFontSystem.begin(renderer);

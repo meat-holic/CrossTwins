@@ -114,9 +114,8 @@ void BaseTheme::drawBatteryLeft(const GfxRenderer& renderer, Rect rect, const bo
   // Center the icon on the digits' ink, which sits a font-dependent distance
   // below the text line's top (the font scales with uiScale).
   int y = rect.y + 6;
-  const auto fontIt = renderer.getFontMap().find(SMALL_FONT_ID);
-  if (fontIt != renderer.getFontMap().end()) {
-    if (const auto glyph = fontIt->second.getGlyph('0', EpdFontFamily::REGULAR)) {
+  if (const auto* font = renderer.getFontFamily(SMALL_FONT_ID)) {
+    if (const auto glyph = font->getGlyph('0', EpdFontFamily::REGULAR)) {
       const int inkTop = renderer.getFontAscenderSize(SMALL_FONT_ID) - static_cast<int>(glyph->top);
       y = rect.y + inkTop + (static_cast<int>(glyph->height) - rect.height) / 2;
     }

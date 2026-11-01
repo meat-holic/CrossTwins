@@ -412,5 +412,5 @@ int CrossPointSettings::getReaderFontId() const {
 
   // The built-in family is a single 10 pt resource. SD font resolution above
   // retains the user's selected family and point size when it is available.
-  return UI_FONT_ID;
+  return BUILTIN_READER_FONT_ID;
 }

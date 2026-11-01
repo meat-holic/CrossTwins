@@ -19,7 +19,7 @@ inline constexpr uint8_t BUILTIN_READER_POINT_SIZES[] = {10};
 
 // The built-in family has no alternate point-size resource to load.
 inline int builtinReaderFontVariant(const int fontId, const float /*scale*/) {
-  return fontId == UI_FONT_ID ? UI_FONT_ID : 0;
+  return fontId == BUILTIN_READER_FONT_ID ? BUILTIN_READER_FONT_ID : 0;
 }
 
 // Vector (.ttf/.otf) fonts offer every whole point size from 8 through 22.

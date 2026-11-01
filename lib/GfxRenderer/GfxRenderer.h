@@ -61,6 +61,11 @@ class GfxRenderer {
   uint32_t frameBufferSize = HalDisplay::BUFFER_SIZE;
   std::vector<uint8_t*> bwBufferChunks;
   std::map<int, EpdFontFamily> fontMap;
+  // The system UI has one logical font id. Keep its base alias and optional
+  // override as fixed state so changing UI font mode does not allocate nodes.
+  int uiFontAliasId_ = 0;
+  int uiFontBaseFontId_ = 0;
+  int uiFontOverrideId_ = 0;
   // Mutable because ensureSdCardFontReady() is const (called from layout code
   // that holds a const GfxRenderer&) but triggers SD card reads and heap
   // allocation inside the SdCardFont objects. Same pragmatic compromise as
@@ -113,6 +118,8 @@ class GfxRenderer {
   // fontId unchanged. The whole string is routed as a unit so each draw/measure
   // call stays single-font (consistent bit depth, metrics, wrapping).
   int resolveTextFontId(int fontId, const char* text, EpdFontFamily::Style style) const;
+  int resolveUiFontId(int fontId) const;
+  int resolveUiCodepointFontId(int fontId, uint32_t codepoint, EpdFontFamily::Style style) const;
 
   // Batch-load `text`'s glyphs into an SD-card font's resident mini tables
   // before a per-glyph measure/draw loop runs. Called when resolveTextFontId
@@ -147,6 +154,31 @@ class GfxRenderer {
   // Setup
   void begin();  // must be called right after display.begin()
   void insertFont(int fontId, EpdFontFamily font);
+  const EpdFontFamily* getFontFamily(int fontId) const {
+    const auto it = fontMap.find(resolveUiFontId(fontId));
+    return it != fontMap.end() ? &it->second : nullptr;
+  }
+  void setFontAlias(int aliasFontId, int baseFontId) {
+    uiFontAliasId_ = aliasFontId;
+    uiFontBaseFontId_ = baseFontId;
+    const auto base = fontMap.find(baseFontId);
+    if (base != fontMap.end()) fontMap.insert_or_assign(aliasFontId, base->second);
+  }
+  void setUiFontOverride(int uiFontId, int actualFontId) {
+    if (uiFontId != uiFontAliasId_) return;
+    const auto actual = fontMap.find(actualFontId);
+    if (actual == fontMap.end()) return;
+    uiFontOverrideId_ = actualFontId;
+    // FreeInkUI's geometry helpers also look up UI font IDs directly in the
+    // exposed map. Keep this stable alias entry synchronized for those users.
+    fontMap.insert_or_assign(uiFontAliasId_, actual->second);
+  }
+  void clearUiFontOverride(int uiFontId) {
+    if (uiFontId != uiFontAliasId_) return;
+    uiFontOverrideId_ = 0;
+    const auto base = fontMap.find(uiFontBaseFontId_);
+    if (base != fontMap.end()) fontMap.insert_or_assign(uiFontAliasId_, base->second);
+  }
   // Clears both the flash-font map and any SD-font registration for fontId.
   // Coupled to avoid dangling SdCardFont* in sdCardFonts_ when callers free
   // the underlying SdCardFont and forget the SD-side unregister.
@@ -198,6 +230,7 @@ class GfxRenderer {
   // Register/clear size-matched CJK UI fallbacks (see fallbackFontMap_).
   // setFallbackFont maps a primary UI font id to an SD font id of the same size.
   void setFallbackFont(int primaryFontId, int fallbackFontId) { fallbackFontMap_[primaryFontId] = fallbackFontId; }
+  void clearFallbackFont(int primaryFontId) { fallbackFontMap_.erase(primaryFontId); }
   void clearFallbackFonts() { fallbackFontMap_.clear(); }
 
   void setFontVariantProvider(const FontVariantProvider& provider) { fontVariantProvider_ = provider; }

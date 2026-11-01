@@ -197,6 +197,15 @@ void SettingsActivity::activateIndex(const int index) {
 }
 
 void SettingsActivity::applyUiSettingChange(uint8_t CrossPointSettings::* valuePtr) {
+  if (valuePtr == &CrossPointSettings::uiFontMode) {
+    // The render task can be traversing the same font map or SD glyph cache.
+    // Switching the alias may unload the current UI face, so serialize it with
+    // rendering just like TextSettingsActivity's reader-family changes.
+    RenderLock lock;
+    sdFontSystem.applyUiFontMode(renderer);
+    resetUi();
+    return;
+  }
   // Theme changes take effect immediately, on this screen — reload the theme
   // and re-derive the app's tokens so the very next repaint is in the new look.
   if (valuePtr != &CrossPointSettings::uiTheme) {

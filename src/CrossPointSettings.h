@@ -357,6 +357,8 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   uint8_t longPressMenuFunction = LP_MENU_DISABLED;
   // UI Theme
   uint8_t uiTheme = LYRA;
+  enum UI_FONT_MODE { UI_FONT_BUILTIN = 0, UI_FONT_SD_CARD = 1, UI_FONT_MODE_COUNT };
+  uint8_t uiFontMode = UI_FONT_BUILTIN;
   // Sunlight fading compensation
   uint8_t fadingFix = 0;
   // Power button return from footnotes (1 = enabled, 0 = disabled)
