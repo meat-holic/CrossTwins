@@ -129,7 +129,7 @@ const char* recentBookTitle(const RecentBook& book) {
   return tr(STR_LIBRARY_UNKNOWN_TITLE);
 }
 
-void drawProgressLine(GfxRenderer& renderer, const int y, const int rightEdge, const int leftLimit,
+void drawProgressLine(const GfxRenderer& renderer, const int y, const int rightEdge, const int leftLimit,
                       const int progress) {
   constexpr int MAX_BAR_SEGMENTS = 20;
   const int hashWidth = renderer.getTextWidth(UI_10_FONT_ID, "#");
