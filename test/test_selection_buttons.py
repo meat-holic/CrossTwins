@@ -109,19 +109,49 @@ popup_buttons = "  bool handleButtons(" + popup_source.split("  bool handleButto
 )[0]
 popup_harness = r"""
 #include <algorithm>
+#include <atomic>
 #include <cassert>
 #include <cstddef>
 #include <functional>
+#include <memory>
+#include <string>
 #include <vector>
+#include "components/OptionPopupPaging.h"
 struct RenderLock { ~RenderLock() {} };
 struct Input { bool touch = false, back = false, confirm = false, outsideTap = false;
   bool hasTouch() const { return touch; }
 };
+struct PopupData { std::shared_ptr<const std::vector<std::string>> options; };
+struct AtomicPopupData {
+  std::shared_ptr<const PopupData> load(std::memory_order) const { return value; }
+  void store(std::shared_ptr<const PopupData> next, std::memory_order = std::memory_order_seq_cst) {
+    value = std::move(next);
+  }
+  std::shared_ptr<const PopupData> value;
+};
 struct Popup {
-  static constexpr int MAX_OPTIONS = 16;
-  bool active = true;
-  int selectedIndex = 0;
-  std::vector<int> ownedStrings{0};
+  Popup() {
+    auto data = std::make_shared<PopupData>();
+    data->options = std::make_shared<const std::vector<std::string>>(1, "option");
+    data_.store(std::move(data));
+  }
+  std::shared_ptr<const PopupData> dataSnapshot() const { return data_.load(std::memory_order_acquire); }
+  void closeAndSelect() {
+    const int selected = selectedIndex.load(std::memory_order_acquire);
+    active.store(false, std::memory_order_release);
+    data_.store({}, std::memory_order_release);
+    auto callback = std::move(onSelectCallback);
+    onSelectCallback = nullptr;
+    if (callback) callback(selected);
+  }
+  void closeWithoutSelect() {
+    active.store(false, std::memory_order_release);
+    onSelectCallback = nullptr;
+    data_.store({}, std::memory_order_release);
+  }
+  std::atomic<bool> active{true};
+  std::atomic<int> selectedIndex{0};
+  AtomicPopupData data_;
   std::function<void(int)> onSelectCallback;
   bool isActive() const { return active; }
 """ + popup_buttons + r"""
@@ -180,6 +210,9 @@ with tempfile.TemporaryDirectory() as directory:
     subprocess.run(["c++", "-std=c++20", str(cpp), "-o", str(executable)], check=True)
     subprocess.run([str(executable)], check=True)
     cpp.write_text(popup_harness)
-    subprocess.run(["c++", "-std=c++20", "-Wall", "-Wextra", "-Werror", str(cpp), "-o", str(executable)], check=True)
+    subprocess.run(
+        ["c++", "-std=c++20", "-Wall", "-Wextra", "-Werror", "-I", str(ROOT / "src"), str(cpp), "-o", str(executable)],
+        check=True,
+    )
     subprocess.run([str(executable)], check=True)
 print("Selection button and popup regression checks passed")

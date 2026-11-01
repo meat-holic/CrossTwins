@@ -1,0 +1,17 @@
+{
+  "name": "InflateReader",
+  "version": "1.0.0",
+  "description": "Small-footprint uzlib wrapper used by EpdFont decompression",
+  "frameworks": "*",
+  "platforms": "*",
+  "dependencies": [
+    {
+      "name": "uzlib",
+      "version": "*"
+    }
+  ],
+  "build": {
+    "srcDir": ".",
+    "includeDir": "."
+  }
+}

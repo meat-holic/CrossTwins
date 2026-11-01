@@ -14,6 +14,12 @@ TEST(ReleaseVersion, OrdersRcRevisionsBeforeTheFinalRelease) {
   EXPECT_TRUE(release_version::isNewer("2.0.0", "2.0.0-rc2.rev.2"));
 }
 
+TEST(ReleaseVersion, OrdersRc3RevisionAfterThePublishedRc3Firmware) {
+  EXPECT_TRUE(release_version::isNewer("2.0.0-rc3.rev.1", "2.0.0-rc3"));
+  EXPECT_FALSE(release_version::isNewer("2.0.0-rc3.rev.1", "2.0.0-rc3.rev.1"));
+  EXPECT_FALSE(release_version::isNewer("2.0.0-rc3", "2.0.0-rc3.rev.1"));
+}
+
 TEST(ReleaseVersion, HandlesVPrefixAndRejectsEqualOrOlderVersions) {
   EXPECT_TRUE(release_version::isNewer("v2.0.0-rc2.rev.2", "2.0.0-rc2.rev.1"));
   EXPECT_FALSE(release_version::isNewer("v2.0.0-rc2.rev.2", "2.0.0-rc2.rev.2"));

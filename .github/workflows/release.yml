@@ -12,6 +12,9 @@ permissions:
 
 jobs:
   build-release:
+    # RC3 revisions are built and attached by release-publish-rc3-revision.yml
+    # before the draft is published. Avoid rebuilding or colliding with those assets.
+    if: ${{ github.event.release.tag_name != 'v2.0.0-rc3.rev.1' }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false

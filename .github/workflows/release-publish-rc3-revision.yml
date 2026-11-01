@@ -1,0 +1,347 @@
+name: Publish CrossTwins RC3 revision
+
+on:
+  push:
+    tags:
+      - 'v2.0.0-rc3.rev.1'
+
+concurrency:
+  group: rc3-revision-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  validate-tag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Validate the exact RC revision and firmware asset contract
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "meat-holic/CrossTwins"
+          test "$RELEASE_TAG" = "v2.0.0-rc3.rev.1"
+          test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
+          git fetch --no-tags origin "refs/tags/${RELEASE_TAG}:refs/tags/release-verification"
+          test "$(git rev-parse 'refs/tags/release-verification^{commit}')" = "$RELEASE_SHA"
+          configured_version="$(sed -n 's/^version = //p' platformio.ini | head -n1)"
+          test "$configured_version" = "2.0.0-rc3"
+          test "$(python scripts/release_assets.py list --tag "$RELEASE_TAG" | wc -l)" = "5"
+          test -f docs/release-notes/${RELEASE_TAG}.ko.md
+
+  wait-for-ci:
+    needs: validate-tag
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      actions: read
+      contents: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_SHA: ${{ github.sha }}
+      CI_BRANCH: release/2.0.0-rc3.rev.1
+    steps:
+      - name: Require successful full CI for this release commit
+        run: |
+          set -euo pipefail
+          deadline=$((SECONDS + 7200))
+          while (( SECONDS < deadline )); do
+            runs="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml \
+              --commit "$RELEASE_SHA" --limit 100 \
+              --json databaseId,event,headBranch,headSha,status,conclusion,url,createdAt)"
+            run="$(jq -c --arg sha "$RELEASE_SHA" --arg branch "$CI_BRANCH" \
+              '[.[] | select(.headSha == $sha and .event == "push" and .headBranch == $branch)] | sort_by(.createdAt) | last // empty' \
+              <<< "$runs")"
+            if [[ -z "$run" ]]; then
+              echo "Waiting for CI push run on $CI_BRANCH at $RELEASE_SHA"
+              sleep 20
+              continue
+            fi
+
+            status="$(jq -r '.status' <<< "$run")"
+            conclusion="$(jq -r '.conclusion // ""' <<< "$run")"
+            url="$(jq -r '.url' <<< "$run")"
+            echo "CI run status=$status conclusion=${conclusion:-pending} url=$url"
+            if [[ "$status" == "completed" ]]; then
+              if [[ "$conclusion" == "success" ]]; then
+                echo "Full CI passed for $RELEASE_SHA: $url" >> "$GITHUB_STEP_SUMMARY"
+                exit 0
+              fi
+              echo "::error::Full CI concluded '$conclusion' for $RELEASE_SHA ($url)"
+              exit 1
+            fi
+            sleep 20
+          done
+          echo "::error::Timed out waiting for full CI for $RELEASE_SHA on $CI_BRANCH"
+          exit 1
+
+  build-release:
+    needs: [validate-tag, wait-for-ci]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - release_env: gh_release_rc
+            device: x3-x4
+          - release_env: sticky-gh_release_rc
+            device: sticky
+          - release_env: x4pro-gh_release_rc
+            device: x4pro
+          - release_env: x4c-gh_release_rc
+            device: x4c
+          - release_env: papermono-gh_release_rc
+            device: papermono
+    env:
+      PIO_ENV: ${{ matrix.release_env }}
+      DEVICE: ${{ matrix.device }}
+      RELEASE_TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          submodules: recursive
+          persist-credentials: false
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/pip
+            ~/.platformio/.cache
+          key: ${{ runner.os }}-pio-rc3-revision-${{ matrix.release_env }}-${{ hashFiles('platformio.ini') }}
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: latest
+          enable-cache: false
+
+      - name: Install PlatformIO Core
+        run: |
+          uv pip install --system -U https://github.com/pioarduino/platformio-core/archive/refs/tags/v6.1.19.zip esptool
+          uv pip install --system -U "littlefs-python>=0.16.0" "fatfs-ng>=0.1.14" "pyyaml>=6.0.2" \
+            "rich-click>=1.8.6" "zopfli>=0.2.2" "intelhex>=2.3.0" "rich>=14.0.0" "urllib3<2" \
+            "cryptography>=45.0.3" "certifi>=2025.8.3" "ecdsa>=0.19.1" "bitstring>=4.3.1" \
+            "reedsolo>=1.5.3,<1.8" "esp-idf-size>=2.0.0" "esp-coredump>=1.14.0"
+
+      - name: Pin pioarduino core inside the platform environment
+        run: |
+          set -euo pipefail
+          pio pkg install -e "$PIO_ENV"
+          uv pip install --python ~/.platformio/penv/bin/python "pioarduino==6.1.19"
+          ~/.platformio/penv/bin/pio --version
+
+      - name: Build firmware for the exact tagged version
+        run: CROSSPOINT_RELEASE_VERSION="${RELEASE_TAG#v}" pio run -e "$PIO_ENV" -j1
+
+      - name: Name and stage firmware
+        run: |
+          set -euo pipefail
+          asset="$(python scripts/release_assets.py name --tag "$RELEASE_TAG" --device "$DEVICE")"
+          cp ".pio/build/$PIO_ENV/firmware.bin" "$asset"
+          test -s "$asset"
+          echo "Built $asset ($(stat -c %s "$asset") bytes)"
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: release-firmware-${{ matrix.device }}
+          path: crosstwins-*.bin
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+
+  font-package:
+    needs: validate-tag
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          submodules: false
+          persist-credentials: false
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+
+      - uses: actions/checkout@v6
+        with:
+          repository: hurss/fonts
+          ref: 3fc1181c6b4af095206068188c3ea966d6738add
+          path: sam3-source
+          persist-credentials: false
+
+      - name: Install FreeType system dependency
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libfreetype6-dev
+
+      - name: Install pinned font conversion dependencies
+        run: python -m pip install fonttools==4.62.1 freetype-py==2.5.1
+
+      - name: Build and verify Sam3KRFont CPFont package
+        run: |
+          python scripts/build_sam3_cpfont_package.py \
+            --ttf sam3-source/ttf/Sam3KRFont.ttf \
+            --license sam3-source/LICENSE.txt \
+            --converter lib/EpdFont/scripts/fontconvert_sdcard.py \
+            --source-revision 3fc1181c6b4af095206068188c3ea966d6738add \
+            --output dist/Sam3KRFont-CPFont.zip
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: release-font-package
+          path: dist/Sam3KRFont-CPFont.zip
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+
+  publish-release:
+    needs: [validate-tag, wait-for-ci, build-release, font-package]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: release-*
+          merge-multiple: true
+
+      - name: Verify firmware, font archive, and source commit
+        run: |
+          set -euo pipefail
+          commit="$(git rev-parse HEAD)"
+          test "$commit" = "$GITHUB_SHA"
+          version="${RELEASE_TAG#v}"
+          python scripts/release_assets.py manifest --tag "$RELEASE_TAG" --commit "$commit" \
+            --assets-dir dist --output "dist/crosstwins-${version}-manifest.json"
+          python scripts/release_assets.py verify --tag "$RELEASE_TAG" --commit "$commit" \
+            --assets-dir dist --manifest "dist/crosstwins-${version}-manifest.json"
+          python - <<'PY'
+          from pathlib import Path
+          from zipfile import ZipFile
+
+          archive = Path("dist/Sam3KRFont-CPFont.zip")
+          expected = {
+              "Sam3KRFont/LICENSE.txt",
+              "Sam3KRFont/README.txt",
+              "Sam3KRFont/Sam3KRFont_10.cpfont",
+              "Sam3KRFont/Sam3KRFont_11.cpfont",
+              "Sam3KRFont/Sam3KRFont_12.cpfont",
+              "Sam3KRFont/Sam3KRFont_13.cpfont",
+          }
+          with ZipFile(archive) as package:
+              assert set(package.namelist()) == expected
+              assert package.testzip() is None
+          PY
+          (cd dist && sha256sum *.bin *.json *.zip > SHA256SUMS)
+          python scripts/release_assets.py list --tag "$RELEASE_TAG" > expected-assets.txt
+          printf '%s\n' "crosstwins-${version}-manifest.json" "Sam3KRFont-CPFont.zip" "SHA256SUMS" >> expected-assets.txt
+          sort -o expected-assets.txt expected-assets.txt
+          find dist -maxdepth 1 -type f -printf '%f\n' | sort > local-assets.txt
+          diff -u expected-assets.txt local-assets.txt
+          cat dist/SHA256SUMS >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Create or safely resume the verified draft release
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "refs/tags/${RELEASE_TAG}:refs/tags/release-verification"
+          test "$(git rev-parse 'refs/tags/release-verification^{commit}')" = "$GITHUB_SHA"
+
+          title="CrossTwins 2.0.0-RC3 Revision 1"
+          notes="dist/release-notes.md"
+          cp "docs/release-notes/${RELEASE_TAG}.ko.md" "$notes"
+          printf '\n\n<!-- CrossTwins release source: %s -->\n' "$GITHUB_SHA" >> "$notes"
+
+          if gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}" > release.json 2> release-error.txt; then
+            marker="<!-- CrossTwins release source: $GITHUB_SHA -->"
+            jq -e --arg tag "$RELEASE_TAG" --arg title "$title" --arg marker "$marker" \
+              '.tag_name == $tag and .name == $title and .draft == true and .prerelease == true and (.body | contains($marker))' \
+              release.json >/dev/null || {
+                echo "::error::An existing release is not the matching unpublished draft for this tag."
+                exit 1
+              }
+            echo "Resuming the matching draft release for $RELEASE_TAG"
+          elif grep -q 'HTTP 404' release-error.txt; then
+            gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+              --title "$title" \
+              --notes-file "$notes" \
+              --prerelease --draft --verify-tag
+          else
+            cat release-error.txt
+            exit 1
+          fi
+
+          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets \
+            --jq '.assets[].name' | sort > existing-assets.txt
+          comm -23 existing-assets.txt expected-assets.txt > unexpected-assets.txt
+          if [[ -s unexpected-assets.txt ]]; then
+            cat unexpected-assets.txt
+            echo "::error::The draft contains unexpected assets; refusing to replace or publish it."
+            exit 1
+          fi
+
+          mkdir -p dist/remote-assets
+          while IFS= read -r asset_name; do
+            [[ -n "$asset_name" ]] || continue
+            if grep -Fxq "$asset_name" existing-assets.txt; then
+              gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+                --pattern "$asset_name" --dir dist/remote-assets
+              if ! cmp -s "dist/$asset_name" "dist/remote-assets/$asset_name"; then
+                echo "::error::Existing draft asset differs: $asset_name. Refusing to overwrite it."
+                exit 1
+              fi
+              echo "Verified existing draft asset $asset_name"
+            else
+              gh release upload "$RELEASE_TAG" "dist/$asset_name" --repo "$GITHUB_REPOSITORY"
+            fi
+          done < expected-assets.txt
+
+      - name: Verify draft assets and publish prerelease
+        run: |
+          set -euo pipefail
+          version="${RELEASE_TAG#v}"
+          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets \
+            --jq '.assets[].name' | sort > published-assets.txt
+          diff -u expected-assets.txt published-assets.txt
+          mkdir verify
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir verify
+          (cd verify && sha256sum --check ../dist/SHA256SUMS)
+          python scripts/release_assets.py verify --tag "$RELEASE_TAG" --commit "$GITHUB_SHA" \
+            --assets-dir verify --manifest "verify/crosstwins-${version}-manifest.json"
+          git fetch --no-tags origin "refs/tags/${RELEASE_TAG}:refs/tags/release-verification"
+          test "$(git rev-parse 'refs/tags/release-verification^{commit}')" = "$GITHUB_SHA"
+          gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+            --title "CrossTwins 2.0.0-RC3 Revision 1" \
+            --notes-file "dist/release-notes.md" \
+            --prerelease --draft=false --verify-tag
+          git fetch --no-tags origin "refs/tags/${RELEASE_TAG}:refs/tags/release-verification-after"
+          test "$(git rev-parse 'refs/tags/release-verification-after^{commit}')" = "$GITHUB_SHA"
+          test "$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft')" = "false"
+          test "$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isPrerelease --jq '.isPrerelease')" = "true"
+          echo "Published https://github.com/${GITHUB_REPOSITORY}/releases/tag/${RELEASE_TAG} from $GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"

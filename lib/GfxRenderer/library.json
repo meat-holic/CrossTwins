@@ -1,0 +1,25 @@
+{
+  "name": "GfxRenderer",
+  "version": "1.0.0",
+  "description": "CrossPoint framebuffer and text renderer",
+  "frameworks": "*",
+  "platforms": "*",
+  "dependencies": [
+    {
+      "name": "EpdFont",
+      "version": "*"
+    },
+    {
+      "name": "InflateReader",
+      "version": "*"
+    },
+    {
+      "name": "FreeInkFont",
+      "version": "*"
+    }
+  ],
+  "build": {
+    "srcDir": ".",
+    "includeDir": "."
+  }
+}
