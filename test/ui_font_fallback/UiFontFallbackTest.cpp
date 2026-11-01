@@ -91,6 +91,17 @@ TEST(UiFontSelection, ChangesUiPathWithoutChangingReaderPath) {
   EXPECT_STREQ(readerFontPath, "/fonts/Reader/Reader_16.cpfont");
 }
 
+TEST(UiFontSelection, DuplicateDisplayNamesKeepDistinctStoredPaths) {
+  const std::vector<std::string> paths = {"", "/.fonts/A/Sam3KRFont_13.cpfont", "/.fonts/B/Sam3KRFont_13.cpfont"};
+  const char* const displayNames[] = {"Built-in", "Sam3KRFont_13", "Sam3KRFont_13"};
+  char uiPath[64] = "/.fonts/B/Sam3KRFont_13.cpfont";
+
+  EXPECT_STREQ(displayNames[1], displayNames[2]);
+  EXPECT_EQ(uiFontSelection::indexForPath(paths, 2, 0, uiPath), 2);
+  ASSERT_TRUE(uiFontSelection::setPathForIndex(uiPath, sizeof(uiPath), paths, 2, 0, 1));
+  EXPECT_STREQ(uiPath, "/.fonts/A/Sam3KRFont_13.cpfont");
+}
+
 TEST(UiFontSelection, ReaderAndUiChoicesRemainIndependentAcrossCombinations) {
   const std::vector<std::string> options = {"Built-in", "/.fonts/Family/A_14.cpfont", "/.fonts/Family/B_23.cpfont"};
   struct Combination {

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <BoardConfig.h>
+#include <FsHelpers.h>
 #include <HalClock.h>
 #include <HalFrontlight.h>
 #include <HalTiltSensor.h>
@@ -148,7 +149,9 @@ inline SettingInfo buildFontSizeSetting(const SdCardFontRegistry* registry) {
 // families use a different loader and are not part of this picker.
 inline SettingInfo buildUiFontSelectionSetting(const SdCardFontRegistry* registry) {
   auto labels = std::make_shared<std::vector<std::string>>();
+  auto paths = std::make_shared<std::vector<std::string>>();
   labels->emplace_back(I18N.get(StrId::STR_FONT_DEFAULT));
+  paths->emplace_back();
   size_t selectableCount = 0;
   if (registry) {
     const auto& families = registry->getFamilies();
@@ -162,7 +165,8 @@ inline SettingInfo buildUiFontSelectionSetting(const SdCardFontRegistry* registr
         if (!uiFontSelection::isSelectableCpfont(family, file)) continue;
         char path[SdCardFontFamilyInfo::PATH_BUFFER_SIZE];
         if (!family.filePath(file, path, sizeof(path))) continue;
-        labels->emplace_back(path);
+        labels->emplace_back(FsHelpers::getFileNameWithoutExtension(std::string_view{path}));
+        paths->emplace_back(path);
         ++selectableCount;
       }
     }
@@ -172,14 +176,16 @@ inline SettingInfo buildUiFontSelectionSetting(const SdCardFontRegistry* registr
   // another value. The runtime will use the built-in face while it is missing.
   bool savedSelectionFound = SETTINGS.uiSdFontPath[0] == '\0';
   for (size_t i = 1; i <= selectableCount; ++i) {
-    if ((*labels)[i] == SETTINGS.uiSdFontPath) {
+    if ((*paths)[i] == SETTINGS.uiSdFontPath) {
       savedSelectionFound = true;
       break;
     }
   }
   uint16_t unavailableIndex = 0;
   if (!savedSelectionFound) {
-    labels->push_back(std::string(I18N.get(StrId::STR_FONT_UNAVAILABLE)) + ": " + SETTINGS.uiSdFontPath);
+    labels->push_back(std::string(I18N.get(StrId::STR_FONT_UNAVAILABLE)) + ": " +
+                      FsHelpers::getFileNameWithoutExtension(std::string_view{SETTINGS.uiSdFontPath}));
+    paths->emplace_back(SETTINGS.uiSdFontPath);
     unavailableIndex = static_cast<uint16_t>(labels->size() - 1);
   }
 
@@ -190,12 +196,12 @@ inline SettingInfo buildUiFontSelectionSetting(const SdCardFontRegistry* registr
   s.key = "uiSdFontPath";
   s.category = StrId::STR_CAT_DISPLAY;
   s.withWebHidden();
-  s.valueGetter = [labels, selectableCount, unavailableIndex]() -> uint16_t {
-    return uiFontSelection::indexForPath(*labels, selectableCount, unavailableIndex, SETTINGS.uiSdFontPath);
+  s.valueGetter = [paths, selectableCount, unavailableIndex]() -> uint16_t {
+    return uiFontSelection::indexForPath(*paths, selectableCount, unavailableIndex, SETTINGS.uiSdFontPath);
   };
-  s.valueSetter = [labels, selectableCount, unavailableIndex](const uint16_t value) {
-    if (!uiFontSelection::setPathForIndex(SETTINGS.uiSdFontPath, sizeof(SETTINGS.uiSdFontPath), *labels,
-                                          selectableCount, unavailableIndex, value)) {
+  s.valueSetter = [paths, selectableCount, unavailableIndex](const uint16_t value) {
+    if (!uiFontSelection::setPathForIndex(SETTINGS.uiSdFontPath, sizeof(SETTINGS.uiSdFontPath), *paths, selectableCount,
+                                          unavailableIndex, value)) {
       return;
     }
     SETTINGS.uiFontSelectionMigrationPending = false;

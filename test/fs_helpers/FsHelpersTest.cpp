@@ -47,6 +47,11 @@ TEST(NormalisePath, CollapsesParentReferenceWithinPath) {
 
 TEST(NormalisePath, DropsLeadingParentReferencesPastRoot) { EXPECT_EQ(FsHelpers::normalisePath("/../../etc"), "etc"); }
 
+TEST(GetFileNameWithoutExtension, ReturnsFontBasenameWithoutDirectoryOrExtension) {
+  EXPECT_EQ(FsHelpers::getFileNameWithoutExtension(std::string_view{ "/.fonts/Sam3/Sam3KRFont_13.cpfont" }),
+            "Sam3KRFont_13");
+}
+
 // Sanitizes into a buffer of `size` bytes (at most 64, the size ScreenshotUtil uses).
 std::string sanitize(const char* input, const size_t size = 64) {
   char out[64];
