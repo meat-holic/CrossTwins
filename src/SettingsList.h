@@ -267,11 +267,40 @@ inline SettingInfo buildShortPowerButtonSetting() {
                                   setShortPowerButtonFromDisplayValue, "shortPwrBtn", StrId::STR_CAT_CONTROLS);
 }
 
-inline std::vector<StrId> homeThemeValues() {
-  static constexpr StrId VALUES[] = {StrId::STR_THEME_CLASSIC, StrId::STR_THEME_LYRA, StrId::STR_THEME_LYRA_EXTENDED,
-                                     StrId::STR_THEME_ROUNDEDRAFF, StrId::STR_THEME_COVER_GRID};
-  const size_t count = UITheme::supportsCoverGrid() ? std::size(VALUES) : std::size(VALUES) - 1;
-  return {VALUES, VALUES + count};
+inline std::vector<StrId> homeThemeValues(const bool supportsCoverGrid) {
+  std::vector<StrId> values = {StrId::STR_THEME_CLASSIC, StrId::STR_THEME_LYRA, StrId::STR_THEME_LYRA_EXTENDED,
+                               StrId::STR_THEME_ROUNDEDRAFF};
+  if (supportsCoverGrid) values.push_back(StrId::STR_THEME_COVER_GRID);
+  values.push_back(StrId::STR_THEME_DOS);
+  return values;
+}
+
+inline uint8_t homeThemeDisplayValue(const bool supportsCoverGrid) {
+  if (!supportsCoverGrid) {
+    if (SETTINGS.uiTheme == CrossPointSettings::COVER_GRID) return CrossPointSettings::LYRA;
+    if (SETTINGS.uiTheme == CrossPointSettings::DOS) return CrossPointSettings::COVER_GRID;
+  }
+  return SETTINGS.uiTheme <= CrossPointSettings::DOS ? SETTINGS.uiTheme : CrossPointSettings::LYRA;
+}
+
+inline void setHomeThemeFromDisplayValue(const bool supportsCoverGrid, const uint8_t displayValue) {
+  if (supportsCoverGrid) {
+    SETTINGS.uiTheme = displayValue <= CrossPointSettings::DOS ? displayValue : CrossPointSettings::LYRA;
+  } else {
+    SETTINGS.uiTheme = displayValue < CrossPointSettings::COVER_GRID    ? displayValue
+                       : displayValue == CrossPointSettings::COVER_GRID ? CrossPointSettings::DOS
+                                                                        : CrossPointSettings::LYRA;
+  }
+  UITheme::getInstance().reload();
+}
+
+inline SettingInfo buildHomeThemeSetting() {
+  const bool supportsCoverGrid = UITheme::supportsCoverGrid();
+  return SettingInfo::DynamicEnum(
+      StrId::STR_UI_THEME, homeThemeValues(supportsCoverGrid),
+      [supportsCoverGrid]() { return homeThemeDisplayValue(supportsCoverGrid); },
+      [supportsCoverGrid](const uint8_t value) { setHomeThemeFromDisplayValue(supportsCoverGrid, value); }, "uiTheme",
+      StrId::STR_CAT_DISPLAY);
 }
 
 using SettingVisitor = void (*)(void* context, SettingInfo& info);

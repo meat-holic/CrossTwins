@@ -112,6 +112,8 @@ void CrossPointSettings::toJson(JsonDocument& doc) const {
   // display-index mapping and is skipped by the generic persistence loop.
   doc["longPressMenuFunction"] = longPressMenuFunction;
   doc["shortPwrBtn"] = shortPwrBtn;
+  // The theme picker maps display positions separately on boards without PSRAM.
+  doc["uiTheme"] = uiTheme;
 
   // Language -- managed by LanguageSelectActivity, not in SettingsList.
   // Stored as an ISO code string for stability across enum reorders.
@@ -196,6 +198,9 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
     }
   };
   forEachBaseSetting(visit);
+  const uint8_t storedTheme = doc["uiTheme"] | static_cast<uint8_t>(uiTheme);
+  uiTheme = clamp(storedTheme, static_cast<uint8_t>(DOS + 1), LYRA);
+  if (storedTheme != uiTheme) needsResave = true;
   needsResave |= reader_line_spacing::readJson(doc, lineSpacing, LINE_COMPRESSION_COUNT, LINE_SPACING_120);
 
   // Plugin System did not exist in older settings files. Preserve the behavior

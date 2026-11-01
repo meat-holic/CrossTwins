@@ -22,6 +22,7 @@ class UITheme {
 
   const ThemeMetrics& getMetrics() const;
   const BaseTheme& getTheme() const { return currentTheme ? *currentTheme : fallbackTheme; }
+  bool isThemeActive(CrossPointSettings::UI_THEME type) const { return activeThemeType == type; }
   // The drawable content area: full screen minus the board's viewable insets
   // (bezel / rounded-corner clearance from BoardConfig::ACTIVE.viewableInsets,
   // oriented to the current rotation). THE single place activities should get
@@ -54,6 +55,7 @@ class UITheme {
 
  private:
   BaseTheme fallbackTheme;
+  CrossPointSettings::UI_THEME activeThemeType = CrossPointSettings::CLASSIC;
   const ThemeMetrics* currentMetrics = &BaseMetrics::values;
   std::unique_ptr<BaseTheme> currentTheme;
   mutable ThemeMetrics adjustedMetrics;

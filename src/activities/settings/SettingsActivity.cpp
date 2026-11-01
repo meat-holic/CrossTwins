@@ -220,6 +220,7 @@ void SettingsActivity::toggleSelectedSetting() {
   }
 
   const auto& setting = settings[selectedSetting];
+  const bool themeSetting = setting.nameId == StrId::STR_UI_THEME;
   const bool sleepScreenChanged = setting.valuePtr == &CrossPointSettings::sleepScreen;
   const bool quickResumeTimeoutChanged = setting.valuePtr == &CrossPointSettings::quickResumeSleepScreen;
 
@@ -256,8 +257,11 @@ void SettingsActivity::toggleSelectedSetting() {
     const uint8_t cur = setting.valueGetter();
     if (totalValues > 2) {
       const auto valueSetter = setting.valueSetter;
-      auto onSelect = [this, valueSetter, sleepScreenChanged, quickResumeTimeoutChanged](int idx) {
+      auto onSelect = [this, valueSetter, sleepScreenChanged, quickResumeTimeoutChanged, themeSetting](int idx) {
         valueSetter(idx);
+        // Dynamic theme setters reload UITheme themselves; rebuild this screen's
+        // shared tokens just as the member-pointer enum path does.
+        if (themeSetting) resetUi();
         syncQuickResumeTimeoutForSleepScreen(sleepScreenChanged, quickResumeTimeoutChanged);
         SETTINGS.saveToFile();
         rebuildSettings();
@@ -273,6 +277,7 @@ void SettingsActivity::toggleSelectedSetting() {
       return;
     }
     setting.valueSetter((cur + 1) % totalValues);
+    if (themeSetting) resetUi();
   } else if (setting.type == SettingType::VALUE && setting.valuePtr != nullptr) {
     const int8_t currentValue = SETTINGS.*(setting.valuePtr);
     if (currentValue + setting.valueRange.step > setting.valueRange.max) {

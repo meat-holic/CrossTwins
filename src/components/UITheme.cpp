@@ -14,6 +14,7 @@
 #include "RecentBooksStore.h"
 #include "components/CoverGridHomeUi.h"
 #include "components/themes/BaseTheme.h"
+#include "components/themes/dos/DosTheme.h"
 #include "components/themes/lyra/Lyra3CoversTheme.h"
 #include "components/themes/lyra/LyraTheme.h"
 #include "components/themes/roundedraff/RoundedRaffTheme.h"
@@ -32,11 +33,13 @@ void UITheme::reload() {
 
 bool UITheme::supportsCoverGrid() { return HalMemory::getPsramHeap().totalBytes > 0; }
 
-bool UITheme::hasCoverGridHome() { return SETTINGS.uiTheme == CrossPointSettings::COVER_GRID && supportsCoverGrid(); }
+bool UITheme::hasCoverGridHome() {
+  return instance.activeThemeType == CrossPointSettings::COVER_GRID && supportsCoverGrid();
+}
 
 bool UITheme::usesSingleLyraHome() {
-  return SETTINGS.uiTheme == CrossPointSettings::LYRA ||
-         (SETTINGS.uiTheme == CrossPointSettings::COVER_GRID && !supportsCoverGrid());
+  return instance.activeThemeType == CrossPointSettings::LYRA ||
+         (instance.activeThemeType == CrossPointSettings::COVER_GRID && !supportsCoverGrid());
 }
 
 void UITheme::drawCoverGridHome(CoverGridHomeUi& home) { home.renderUi(); }
@@ -73,7 +76,19 @@ void UITheme::setTheme(CrossPointSettings::UI_THEME type) {
       currentTheme = std::make_unique<Lyra3CoversTheme>();
       currentMetrics = &Lyra3CoversMetrics::values;
       break;
+    case CrossPointSettings::UI_THEME::DOS: {
+      auto theme = makeUniqueNoThrow<DosTheme>();
+      if (!theme) {
+        LOG_ERR("UI", "OOM: Gallaemok DOS theme");
+        return;
+      }
+      currentTheme = std::move(theme);
+      currentMetrics = &DosMetrics::values;
+      LOG_DBG("UI", "Using Gallaemok DOS theme");
+      break;
+    }
   }
+  activeThemeType = type;
   metricsValid = false;
 }
 

@@ -286,6 +286,9 @@ class BaseTheme {
                                    const int selectorIndex, bool& coverRendered, bool& coverBufferStored,
                                    bool& bufferRestored, std::function<bool()> storeCoverBuffer,
                                    const BookProgressSnapshot* progressSnapshot = nullptr) const;
+  virtual void drawHomeRecentBooks(GfxRenderer& renderer, Rect rect, const std::vector<RecentBook>& recentBooks,
+                                   int selectorIndex, const int* progress, size_t progressCount) const;
+  virtual bool usesHomeCoverImages() const { return true; }
   virtual void drawButtonMenu(GfxRenderer& renderer, Rect rect, int buttonCount, int selectedIndex,
                               const std::function<std::string(int index)>& buttonLabel,
                               const std::function<UIIcon(int index)>& rowIcon) const;
