@@ -29,6 +29,11 @@ class SdCardFontManager {
   // if the family has no file at that size or loading failed.
   int loadFamilyExtraSize(const SdCardFontFamilyInfo& family, GfxRenderer& renderer, uint8_t pointSize, int fontId);
 
+  // Load the exact registered file selected by path (rather than another file
+  // with the same parsed point-size suffix in the same family directory).
+  int loadFamilyFile(const SdCardFontFamilyInfo& family, const SdCardFontFileInfo& file, GfxRenderer& renderer,
+                     int fontId);
+
   // Additively load the family's .cpfont at exactly `pointSize`, registered under `fontId`
   // (a sized variant of the reader font). Returns false when the size is not installed or
   // loading failed.

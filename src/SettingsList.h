@@ -6,10 +6,12 @@
 #include <HalTiltSensor.h>
 #include <I18n.h>
 #include <SdCardFontRegistry.h>
+#include <UiFontSelection.h>
 
 #include <algorithm>
 #include <cstring>
 #include <iterator>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -138,6 +140,66 @@ inline SettingInfo buildFontSizeSetting(const SdCardFontRegistry* registry) {
     if (v < sizes.size()) SETTINGS.fontPointSize = sizes[v];
   };
 
+  return s;
+}
+
+// The UI face is selected independently from the Reader family. Every
+// pre-rasterized CPFont file discovered by the SD registry is offered; vector
+// families use a different loader and are not part of this picker.
+inline SettingInfo buildUiFontSelectionSetting(const SdCardFontRegistry* registry) {
+  auto labels = std::make_shared<std::vector<std::string>>();
+  labels->emplace_back(I18N.get(StrId::STR_FONT_DEFAULT));
+  size_t selectableCount = 0;
+  if (registry) {
+    const auto& families = registry->getFamilies();
+    size_t cpfontCount = 0;
+    for (const auto& family : families) {
+      if (!family.vector) cpfontCount += family.files.size();
+    }
+    labels->reserve(cpfontCount + 2);
+    for (const auto& family : families) {
+      for (const auto& file : family.files) {
+        if (!uiFontSelection::isSelectableCpfont(family, file)) continue;
+        char path[SdCardFontFamilyInfo::PATH_BUFFER_SIZE];
+        if (!family.filePath(file, path, sizeof(path))) continue;
+        labels->emplace_back(path);
+        ++selectableCount;
+      }
+    }
+  }
+
+  // Keep a removed or now-unsupported selection visible until the user chooses
+  // another value. The runtime will use the built-in face while it is missing.
+  bool savedSelectionFound = SETTINGS.uiSdFontPath[0] == '\0';
+  for (size_t i = 1; i <= selectableCount; ++i) {
+    if ((*labels)[i] == SETTINGS.uiSdFontPath) {
+      savedSelectionFound = true;
+      break;
+    }
+  }
+  uint16_t unavailableIndex = 0;
+  if (!savedSelectionFound) {
+    labels->push_back(std::string(I18N.get(StrId::STR_FONT_UNAVAILABLE)) + ": " + SETTINGS.uiSdFontPath);
+    unavailableIndex = static_cast<uint16_t>(labels->size() - 1);
+  }
+
+  SettingInfo s;
+  s.nameId = StrId::STR_UI_FONT_SELECTION;
+  s.type = SettingType::ENUM;
+  s.sharedEnumStringValues = labels;
+  s.key = "uiSdFontPath";
+  s.category = StrId::STR_CAT_DISPLAY;
+  s.withWebHidden();
+  s.valueGetter = [labels, selectableCount, unavailableIndex]() -> uint16_t {
+    return uiFontSelection::indexForPath(*labels, selectableCount, unavailableIndex, SETTINGS.uiSdFontPath);
+  };
+  s.valueSetter = [labels, selectableCount, unavailableIndex](const uint16_t value) {
+    if (!uiFontSelection::setPathForIndex(SETTINGS.uiSdFontPath, sizeof(SETTINGS.uiSdFontPath), *labels,
+                                          selectableCount, unavailableIndex, value)) {
+      return;
+    }
+    SETTINGS.uiFontSelectionMigrationPending = false;
+  };
   return s;
 }
 
@@ -321,7 +383,12 @@ std::vector<SettingInfo> getBaseSettingsList(size_t extraCapacity = 0);
 // UI callers own the list for runtime filtering and font/dictionary options.
 inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* registry = nullptr,
                                                 const std::vector<DictionaryEntry>* dictionaries = nullptr) {
-  auto v = getBaseSettingsList(dictionaries && !dictionaries->empty() ? 1 : 0);
+  auto v = getBaseSettingsList((dictionaries && !dictionaries->empty() ? 1 : 0) + (registry ? 1 : 0));
+  if (registry) {
+    const auto uiFontMode =
+        std::find_if(v.begin(), v.end(), [](const SettingInfo& s) { return s.nameId == StrId::STR_UI_FONT; });
+    if (uiFontMode != v.end()) v.insert(std::next(uiFontMode), buildUiFontSelectionSetting(registry));
+  }
   // Frontlit and lightless variants of a board share one binary (EEGO A4);
   // presence is the I2C probe result from Frontlight.begin(). UI-only: the probe
   // has not run at load time, so the base list must keep the persisted key.

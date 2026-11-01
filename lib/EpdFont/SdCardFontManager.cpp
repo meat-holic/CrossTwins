@@ -98,7 +98,13 @@ int SdCardFontManager::loadFamilyExtraSize(const SdCardFontFamilyInfo& family, G
   // happens to match a UI size) instead of double-loading the file.
   if (const int loadedId = getFontId(family.name, pointSize); loadedId != 0) return loadedId;
 
-  return loadFile(family, *file, renderer, fontId);
+  return loadFamilyFile(family, *file, renderer, fontId);
+}
+
+int SdCardFontManager::loadFamilyFile(const SdCardFontFamilyInfo& family, const SdCardFontFileInfo& file,
+                                      GfxRenderer& renderer, const int fontId) {
+  if (family.vector || file.pointSize == 0) return 0;
+  return loadFile(family, file, renderer, fontId);
 }
 
 bool SdCardFontManager::loadFamilyVariant(const SdCardFontFamilyInfo& family, GfxRenderer& renderer,

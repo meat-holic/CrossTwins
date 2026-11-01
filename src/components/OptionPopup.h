@@ -3,12 +3,16 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cstdint>
+#include <cstdio>
 #include <functional>
+#include <memory>
 #include <string>
 #include <vector>
 
 #include "GfxRenderer.h"
 #include "MappedInputManager.h"
+#include "components/OptionPopupPaging.h"
 #include "components/UITheme.h"
 #include "components/UiAppHelpers.h"
 
@@ -21,71 +25,73 @@
 // (beginPublishCycle()) and publishes it only once every hit() call for the
 // frame is done (publish()), so handleInput()'s routePublished()/
 // publishedData() reads on the loop task always see a complete table, never
-// one render is mid-rebuilding. uiReady closes when show() replaces the
-// popup's data, then stays open across ordinary repaints after the first
-// publication so a release cannot be dropped during a highlight repaint.
+// one render is mid-rebuilding. The publication generation rejects an old
+// render if show() replaces the popup while that render is in flight.
 class OptionPopup {
  public:
   void show(StrId titleId, const StrId* optionIds, int optionCount, int currentIndex,
             std::function<void(int)> onSelect) {
-    title = I18N.get(titleId);
-    headline.clear();
-    ownedStrings.resize(optionCount);
-    for (int i = 0; i < optionCount; i++) {
-      ownedStrings[i] = I18N.get(optionIds[i]);
-    }
-    activate(currentIndex, std::move(onSelect));
+    std::vector<std::string> options;
+    options.reserve(optionCount);
+    for (int i = 0; i < optionCount; i++) options.emplace_back(I18N.get(optionIds[i]));
+    showWithData(I18N.get(titleId), {}, {}, makeOwnedOptions(std::move(options)), currentIndex, std::move(onSelect));
   }
 
   void show(const char* titleStr, const char* const* options, int optionCount, int currentIndex,
             std::function<void(int)> onSelect) {
-    title = titleStr;
-    headline.clear();
-    ownedStrings.resize(optionCount);
-    for (int i = 0; i < optionCount; i++) {
-      ownedStrings[i] = options[i];
-    }
-    activate(currentIndex, std::move(onSelect));
+    std::vector<std::string> ownedOptions;
+    ownedOptions.reserve(optionCount);
+    for (int i = 0; i < optionCount; i++) ownedOptions.emplace_back(options[i]);
+    showWithData(titleStr ? titleStr : "", {}, {}, makeOwnedOptions(std::move(ownedOptions)), currentIndex,
+                 std::move(onSelect));
   }
 
   // As above, plus a subject line inside the dialog (a book or event title).
   // It wraps to several lines under the caption; the dialog grows to fit.
   void show(const char* titleStr, const char* headlineStr, const char* const* options, int optionCount,
             int currentIndex, std::function<void(int)> onSelect) {
-    show(titleStr, options, optionCount, currentIndex, std::move(onSelect));
-    headline = headlineStr ? headlineStr : "";
+    std::vector<std::string> ownedOptions;
+    ownedOptions.reserve(optionCount);
+    for (int i = 0; i < optionCount; i++) ownedOptions.emplace_back(options[i]);
+    showWithData(titleStr ? titleStr : "", headlineStr ? headlineStr : "", {},
+                 makeOwnedOptions(std::move(ownedOptions)), currentIndex, std::move(onSelect));
   }
 
   // Message dialog: a wrapped body under the (optional) title, like the
   // Wi-Fi forget-network prompt. Pass an empty title for a message-only look.
   void showMessage(const char* titleStr, const char* messageStr, const char* const* options, int optionCount,
                    int currentIndex, std::function<void(int)> onSelect) {
-    show(titleStr, options, optionCount, currentIndex, std::move(onSelect));
-    message = messageStr ? messageStr : "";
+    std::vector<std::string> ownedOptions;
+    ownedOptions.reserve(optionCount);
+    for (int i = 0; i < optionCount; i++) ownedOptions.emplace_back(options[i]);
+    showWithData(titleStr ? titleStr : "", {}, messageStr ? messageStr : "", makeOwnedOptions(std::move(ownedOptions)),
+                 currentIndex, std::move(onSelect));
   }
 
   void show(StrId titleId, const std::vector<std::string>& options, int currentIndex,
             std::function<void(int)> onSelect) {
-    title = I18N.get(titleId);
-    headline.clear();
-    ownedStrings = options;
-    activate(currentIndex, std::move(onSelect));
+    showWithData(I18N.get(titleId), {}, {}, copyOptions(options), currentIndex, std::move(onSelect));
+  }
+
+  void show(StrId titleId, std::shared_ptr<const std::vector<std::string>> options, int currentIndex,
+            std::function<void(int)> onSelect) {
+    showWithData(I18N.get(titleId), {}, {}, std::move(options), currentIndex, std::move(onSelect));
   }
 
   bool handleInput(MappedInputManager& input, const std::function<void()>& requestUpdate) {
-    if (!active) return false;
+    if (!active.load(std::memory_order_acquire)) return false;
 
     const freeink::ui::InputSnapshot snap = touchSnapshotFrom(input);
     if (snap.touchPressed || snap.touchReleased || snap.touchHeld) {
       // Interactions are registered on the render task; only route once the
-      // first render after show() has populated the table (uiReady handshake).
-      if (uiReady) {
+      // first render after show() has populated the table (generation handshake).
+      if (publishedGeneration.load(std::memory_order_acquire) ==
+          interactionGeneration.load(std::memory_order_acquire)) {
         const freeink::ui::ActionEvent event = interactions.routePublished(snap);
         if (event && event.action == ACTION_OPTION) {
           // Tap released on an option: select it, fire, dismiss.
-          selectedIndex = event.value;
-          active = false;
-          if (onSelectCallback) onSelectCallback(selectedIndex);
+          selectedIndex.store(event.value, std::memory_order_release);
+          closeAndSelect();
           haptic_feedback::touchAction();
           requestUpdate();
           return true;
@@ -97,7 +103,7 @@ class OptionPopup {
         if (snap.touchReleased && snap.touchX >= 0) {
           // Tap released outside the dialog: dismiss without firing. Swipe-end
           // releases arrive with -1,-1 coords and fall through (no dismiss).
-          active = false;
+          closeWithoutSelect();
           haptic_feedback::touchAction();
           requestUpdate();
           return true;
@@ -108,8 +114,8 @@ class OptionPopup {
           const int16_t idx = interactions.activeIndex();
           if (idx >= 0) {
             const freeink::ui::Interaction& hit = interactions.publishedData()[idx];
-            if (hit.action == ACTION_OPTION && selectedIndex != hit.value) {
-              selectedIndex = hit.value;
+            if (hit.action == ACTION_OPTION && selectedIndex.load(std::memory_order_acquire) != hit.value) {
+              selectedIndex.store(hit.value, std::memory_order_release);
               requestUpdate();
             }
           }
@@ -126,23 +132,31 @@ class OptionPopup {
 
   bool handleButtons(const bool previous, const bool next, const bool confirm, const bool back,
                      const std::function<void()>& requestUpdate) {
-    if (!active) return false;
-    const int count = std::min<int>(ownedStrings.size(), MAX_OPTIONS);
+    if (!active.load(std::memory_order_acquire)) return false;
+    int count = 0;
+    {
+      const auto data = dataSnapshot();
+      count = data && data->options ? static_cast<int>(data->options->size()) : 0;
+    }
+    if (count == 0) return true;
     if (previous) {
-      selectedIndex = (selectedIndex - 1 + count) % count;
+      const int current = selectedIndex.load(std::memory_order_acquire);
+      selectedIndex.store(static_cast<int>(optionPopupPaging::adjacentSelection(count, current, true)),
+                          std::memory_order_release);
       requestUpdate();
       return true;
     } else if (next) {
-      selectedIndex = (selectedIndex + 1) % count;
+      const int current = selectedIndex.load(std::memory_order_acquire);
+      selectedIndex.store(static_cast<int>(optionPopupPaging::adjacentSelection(count, current, false)),
+                          std::memory_order_release);
       requestUpdate();
       return true;
     } else if (confirm) {
-      active = false;
-      if (onSelectCallback) onSelectCallback(selectedIndex);
+      closeAndSelect();
       requestUpdate();
       return true;
     } else if (back) {
-      active = false;
+      closeWithoutSelect();
       requestUpdate();
       return true;
     }
@@ -150,7 +164,7 @@ class OptionPopup {
   }
 
   bool processRender(GfxRenderer& renderer, const MappedInputManager& input) const {
-    if (!active) return false;
+    if (!active.load(std::memory_order_acquire)) return false;
     const auto popupLabels = input.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
     GUI.drawButtonHints(renderer, popupLabels.btn1, popupLabels.btn2, popupLabels.btn3, popupLabels.btn4);
     render(renderer);
@@ -159,7 +173,8 @@ class OptionPopup {
   }
 
   void render(const GfxRenderer& renderer) const {
-    if (!active) return;
+    if (!active.load(std::memory_order_acquire)) return;
+    const uint32_t renderGeneration = interactionGeneration.load(std::memory_order_acquire);
     namespace fui = freeink::ui;
 
     // Per-render target: a GfxRendererTarget is a renderer reference plus
@@ -183,28 +198,25 @@ class OptionPopup {
     fui::Frame<INTERACTION_CAPACITY> frame(target, device, noInput, interactions);
 
     const auto& metrics = UITheme::getInstance().getMetrics();
-    const int totalOptions = static_cast<int>(ownedStrings.size());
-    const uint8_t count = static_cast<uint8_t>(totalOptions > MAX_OPTIONS ? MAX_OPTIONS : totalOptions);
-
+    const auto data = dataSnapshot();
+    if (!data || !data->options) return;
+    const auto& allOptions = *data->options;
+    const int totalOptions = static_cast<int>(allOptions.size());
+    const int selected = selectedIndex.load(std::memory_order_acquire);
     fui::DialogOption options[MAX_OPTIONS];
-    for (uint8_t i = 0; i < count; ++i) {
-      options[i].label = ownedStrings[i].c_str();
-      options[i].action = ACTION_OPTION;
-      options[i].value = static_cast<int16_t>(i);
-      options[i].state = (i == selectedIndex) ? fui::StateFocused : fui::StateNormal;
-    }
 
     fui::OptionDialogProps props;
-    props.title = title.empty() ? nullptr : title.c_str();
-    props.headline = headline.empty() ? nullptr : headline.c_str();
-    if (!message.empty()) {
-      props.message = message.c_str();
+    props.title = data->title.empty() ? nullptr : data->title.c_str();
+    props.headline = data->headline.empty() ? nullptr : data->headline.c_str();
+    char pageIndicator[24];
+    if (!data->message.empty()) {
+      props.message = data->message.c_str();
       props.messageText.font = fui::GfxRendererTarget::FONT_BODY;
       props.messageText.align = fui::TextAlign::Center;
       props.messageText.maxLines = 6;
     }
     props.options = options;
-    props.optionCount = count;
+    props.optionCount = 0;
     props.verticalOptions = true;
     // Touch only: physical buttons stay on the legacy wrap/confirm path above,
     // so the buffer never competes with it for focus/confirm dispatch.
@@ -245,6 +257,42 @@ class OptionPopup {
     const fui::Rect screen = device.screen();
     const int16_t width =
         fui::clampI16(std::min<int>(screen.width * 3 / 4, screen.width - metrics.optionPopupDialogSideMargin * 2));
+
+    // Fit as many rows as the active UI font and current orientation allow.
+    // The dialog's chrome is measured by the same routine used for drawing;
+    // only the row count is bounded by the fixed interaction buffer.
+    auto visibleCount = [&]() {
+      const int16_t chromeHeight = fui::optionDialogHeight(target, props, width);
+      const size_t availableHeight =
+          chromeHeight < screen.height ? static_cast<size_t>(screen.height - chromeHeight) : 0;
+      return optionPopupPaging::visibleCountForHeight(totalOptions, MAX_OPTIONS, availableHeight,
+                                                      static_cast<size_t>(std::max<int16_t>(1, props.buttonHeight)),
+                                                      static_cast<size_t>(std::max<int16_t>(0, props.gap)));
+    };
+    size_t pageSize = visibleCount();
+    if (pageSize == 0 && totalOptions > 0) pageSize = 1;
+    if (data->message.empty() && pageSize < static_cast<size_t>(totalOptions)) {
+      snprintf(pageIndicator, sizeof(pageIndicator), "%d/%d", selected + 1, totalOptions);
+      props.message = pageIndicator;
+      props.messageText.font = fui::GfxRendererTarget::FONT_BODY;
+      props.messageText.align = fui::TextAlign::Center;
+      props.messageText.maxLines = 1;
+      pageSize = visibleCount();
+      if (pageSize == 0 && totalOptions > 0) pageSize = 1;
+    }
+
+    const auto window = optionPopupPaging::windowForSelection(totalOptions, selected, pageSize);
+    const int firstOption = static_cast<int>(window.first);
+    const uint8_t count = static_cast<uint8_t>(window.count);
+    for (uint8_t i = 0; i < count; ++i) {
+      const int optionIndex = firstOption + i;
+      options[i].label = allOptions[optionIndex].c_str();
+      options[i].action = ACTION_OPTION;
+      options[i].value = static_cast<int16_t>(optionIndex);
+      options[i].state = (optionIndex == selected) ? fui::StateFocused : fui::StateNormal;
+    }
+    props.optionCount = count;
+
     const int16_t height = fui::clampI16(fui::optionDialogHeight(target, props, width), 0, screen.height);
     const fui::Rect dialogRect = fui::centeredRect(screen, fui::Size{width, height});
 
@@ -255,45 +303,82 @@ class OptionPopup {
     // Atomically make this generation the one handleInput() reads, now that
     // every hit() call for this frame is done.
     interactions.publish();
-    uiReady = true;
+    publishedGeneration.store(renderGeneration, std::memory_order_release);
   }
 
-  bool isActive() const { return active; }
+  bool isActive() const { return active.load(std::memory_order_acquire); }
 
   // Close without firing the callback (the surface under the popup is going
   // away, e.g. its host screen closes from outside the popup's own input).
-  void dismiss() {
-    active = false;
-    onSelectCallback = nullptr;
-  }
+  void dismiss() { closeWithoutSelect(); }
 
  private:
-  // The dialog has no scrolling, so options past MAX_OPTIONS would render off
-  // screen anyway; a fixed cap keeps the DialogOption array on the stack and
-  // the interaction table small. +1 slot for the chrome guard rect.
-  static constexpr int MAX_OPTIONS = 16;
+  // A page keeps the DialogOption array on the stack and interaction table
+  // small while button navigation can still reach every option. +1 slot for
+  // the chrome guard rect.
+  static constexpr int MAX_OPTIONS = optionPopupPaging::MAX_VISIBLE_OPTIONS;
   static constexpr size_t INTERACTION_CAPACITY = MAX_OPTIONS + 1;
   static constexpr freeink::ui::ActionId ACTION_OPTION = 1;
   static constexpr freeink::ui::ActionId ACTION_CHROME = 2;
 
-  void activate(int currentIndex, std::function<void(int)> onSelect) {
-    const int count = std::min<int>(ownedStrings.size(), MAX_OPTIONS);
-    selectedIndex = currentIndex >= 0 && currentIndex < count ? currentIndex : 0;
-    onSelectCallback = std::move(onSelect);
-    message.clear();
-    uiReady = false;
-    active = count > 0;
+  struct PopupData {
+    std::string title;
+    std::string headline;
+    std::string message;
+    std::shared_ptr<const std::vector<std::string>> options;
+  };
+
+  static std::shared_ptr<const std::vector<std::string>> makeOwnedOptions(std::vector<std::string> options) {
+    return std::make_shared<const std::vector<std::string>>(std::move(options));
   }
 
-  bool active = false;
-  std::string title;
-  std::string headline;
-  std::string message;
-  std::vector<std::string> ownedStrings;
-  int selectedIndex = 0;
+  static std::shared_ptr<const std::vector<std::string>> copyOptions(const std::vector<std::string>& options) {
+    return std::make_shared<const std::vector<std::string>>(options);
+  }
+
+  std::shared_ptr<const PopupData> dataSnapshot() const { return data_.load(std::memory_order_acquire); }
+
+  void showWithData(std::string titleStr, std::string headlineStr, std::string messageStr,
+                    std::shared_ptr<const std::vector<std::string>> options, const int currentIndex,
+                    std::function<void(int)> onSelect) {
+    active.store(false, std::memory_order_release);
+    interactionGeneration.fetch_add(1, std::memory_order_acq_rel);
+    auto data = std::make_shared<PopupData>();
+    data->title = std::move(titleStr);
+    data->headline = std::move(headlineStr);
+    data->message = std::move(messageStr);
+    data->options = std::move(options);
+    const int count = data->options ? static_cast<int>(data->options->size()) : 0;
+    selectedIndex.store(currentIndex >= 0 && currentIndex < count ? currentIndex : 0, std::memory_order_release);
+    onSelectCallback = std::move(onSelect);
+    data_.store(std::shared_ptr<const PopupData>(std::move(data)), std::memory_order_release);
+    active.store(count > 0, std::memory_order_release);
+  }
+
+  void closeWithoutSelect() {
+    active.store(false, std::memory_order_release);
+    interactionGeneration.fetch_add(1, std::memory_order_acq_rel);
+    onSelectCallback = nullptr;
+    data_.store({}, std::memory_order_release);
+  }
+
+  void closeAndSelect() {
+    const int selected = selectedIndex.load(std::memory_order_acquire);
+    active.store(false, std::memory_order_release);
+    interactionGeneration.fetch_add(1, std::memory_order_acq_rel);
+    data_.store({}, std::memory_order_release);
+    auto callback = std::move(onSelectCallback);
+    onSelectCallback = nullptr;
+    if (callback) callback(selected);
+  }
+
+  std::atomic<bool> active{false};
+  std::atomic<std::shared_ptr<const PopupData>> data_;
+  std::atomic<int> selectedIndex{0};
   std::function<void(int)> onSelectCallback;
-  // Written by the render task (frame registration), routed by the loop task;
-  // uiReady closes the rebuild window exactly like UiListActivity::uiReady.
+  // The render publishes the generation represented by the interaction table;
+  // handleInput ignores a table from a popup that has since been replaced.
   mutable freeink::ui::InteractionBuffer<INTERACTION_CAPACITY> interactions;
-  mutable std::atomic<bool> uiReady{false};
+  std::atomic<uint32_t> interactionGeneration{0};
+  mutable std::atomic<uint32_t> publishedGeneration{static_cast<uint32_t>(-1)};
 };

@@ -1,7 +1,9 @@
 #pragma once
 #include <I18n.h>
 
+#include <cstdint>
 #include <functional>
+#include <memory>
 #include <span>
 #include <string>
 #include <vector>
@@ -42,6 +44,7 @@ struct SettingInfo {
   std::vector<StrId> enumValues;
   std::span<const StrId> staticEnumValues;
   std::vector<std::string> enumStringValues;  // runtime alternative to StrId enumValues (for SD card fonts etc.)
+  std::shared_ptr<const std::vector<std::string>> sharedEnumStringValues;
   SettingAction action = SettingAction::None;
 
   struct ValueRange {
@@ -63,8 +66,10 @@ struct SettingInfo {
   size_t stringMaxLen = 0;
 
   // Dynamic accessors (for settings stored outside CrossPointSettings, e.g. KOReaderCredentialStore)
-  std::function<uint8_t()> valueGetter;
-  std::function<void(uint8_t)> valueSetter;
+  // Runtime pickers may contain more than 255 SD font files. Keep their
+  // in-memory selection index wider than the persisted setting fields.
+  std::function<uint16_t()> valueGetter;
+  std::function<void(uint16_t)> valueSetter;
   std::function<std::string()> stringGetter;
   std::function<void(const std::string&)> stringSetter;
 
@@ -85,6 +90,10 @@ struct SettingInfo {
 
   std::span<const StrId> enumLabels() const {
     return staticEnumValues.empty() ? std::span<const StrId>(enumValues) : staticEnumValues;
+  }
+
+  const std::vector<std::string>& enumStringOptions() const {
+    return sharedEnumStringValues ? *sharedEnumStringValues : enumStringValues;
   }
 
   static SettingInfo Toggle(StrId nameId, uint8_t CrossPointSettings::* ptr, const char* key = nullptr,
@@ -204,7 +213,7 @@ class SettingsActivity final : public UiListActivity {
   void toggleSelectedSetting();
   void openSleepTimeoutPicker();
   void openSlideshowIntervalPicker();
-  void applyUiSettingChange(uint8_t CrossPointSettings::* valuePtr);
+  void applyUiSettingChange(uint8_t CrossPointSettings::* valuePtr, bool uiFontSelectionChanged = false);
   void syncQuickResumeTimeoutForSleepScreen(bool sleepScreenChanged, bool quickResumeTimeoutChanged);
   static std::string settingValueText(const SettingInfo& setting);
 

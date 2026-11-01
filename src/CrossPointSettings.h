@@ -359,6 +359,11 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   uint8_t uiTheme = LYRA;
   enum UI_FONT_MODE { UI_FONT_BUILTIN = 0, UI_FONT_SD_CARD = 1, UI_FONT_MODE_COUNT };
   uint8_t uiFontMode = UI_FONT_BUILTIN;
+  // Exact SD path for the independent UI .cpfont selection. Empty means the
+  // built-in face. This is intentionally separate from the Reader family.
+  char uiSdFontPath[160] = "";
+  // Transient migration flag for settings saved before the UI picker existed.
+  bool uiFontSelectionMigrationPending = false;
   // Sunlight fading compensation
   uint8_t fadingFix = 0;
   // Power button return from footnotes (1 = enabled, 0 = disabled)

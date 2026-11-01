@@ -4,6 +4,7 @@
 #include <I18n.h>
 #include <Logging.h>
 #include <ObfuscationUtils.h>
+#include <UiFontSelection.h>
 
 #include <algorithm>
 #include <cstring>
@@ -104,6 +105,10 @@ void CrossPointSettings::toJson(JsonDocument& doc) const {
   if (sdFontFamilyName[0] != '\0') {
     doc["sdFontFamilyName"] = sdFontFamilyName;
   }
+  // Persist empty too: it records an explicit Built-in UI font selection.
+  // While a legacy selection is waiting for SD discovery, keep the old schema
+  // key absent so a boot without the card does not lose the migration chance.
+  if (!uiFontSelectionMigrationPending) doc["uiSdFontPath"] = uiSdFontPath;
   // Dictionary folder name — uses dynamic getter/setter in SettingsList, save manually
   if (dictionaryName[0] != '\0') {
     doc["dictionaryName"] = dictionaryName;
@@ -290,6 +295,22 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
         copyToField(sdFontFamilyName, "OpenDyslexic", sizeof(sdFontFamilyName));
         break;
     }
+  }
+  const auto savedUiFontPath = doc["uiSdFontPath"];
+  if (savedUiFontPath.is<const char*>()) {
+    const char* path = savedUiFontPath.as<const char*>();
+    copyToField(uiSdFontPath, path, sizeof(uiSdFontPath));
+    if (strlen(path) >= sizeof(uiSdFontPath)) needsResave = true;
+    uiFontSelectionMigrationPending = false;
+  } else {
+    uiSdFontPath[0] = '\0';
+    // Defer migration until the SD registry is available. The runtime only
+    // maps the old Reader family when it contains the exact 11 pt CPFont face
+    // used by the previous UI-font implementation.
+    uiFontSelectionMigrationPending = uiFontSelection::shouldDeferLegacyMigration(
+        !savedUiFontPath.isNull(), uiFontMode == UI_FONT_SD_CARD, sdFontFamilyName);
+    if (!savedUiFontPath.isNull()) needsResave = true;
+    if (!uiFontSelectionMigrationPending) needsResave = true;
   }
   if (storedFontFamily != STORED_PRETENDARD) needsResave = true;
   // Dictionary folder name — uses dynamic getter/setter in SettingsList, load manually

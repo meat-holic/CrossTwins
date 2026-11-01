@@ -4,6 +4,8 @@ add_executable(UiFontFallbackTest
 )
 
 target_include_directories(UiFontFallbackTest PRIVATE
+  ${REPO_ROOT}/src
+  ${REPO_ROOT}/lib/EpdFont
   ${REPO_ROOT}/lib/Utf8
 )
 

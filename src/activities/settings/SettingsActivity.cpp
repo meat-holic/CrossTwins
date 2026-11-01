@@ -87,7 +87,16 @@ constexpr size_t EXTRA_ROWS_PER_SECTION = 6;
 void SettingsActivity::rebuildSettings() {
   // Pick up any fonts uploaded/deleted over the web server since the last
   // reader activity ran — otherwise the font-family picker shows stale list.
-  sdFontSystem.refreshIfDirty();
+  const bool fontsRefreshed = sdFontSystem.refreshIfDirty();
+  const bool reapplyUiFont = sdFontSystem.consumeUiFontReapplyRequest();
+  if (fontsRefreshed || reapplyUiFont) {
+    RenderLock lock;
+    // If a selected file was replaced at the same path, reload the cached
+    // Reader face before the UI is allowed to borrow that exact family/size.
+    sdFontSystem.ensureLoaded(renderer);
+    sdFontSystem.applyUiFontMode(renderer, true);
+    resetUi();
+  }
 
   // Rescan /dictionaries on every rebuild: cheap (one directory listing) and
   // picks up dictionaries copied to the SD card since the last visit.
@@ -196,8 +205,8 @@ void SettingsActivity::activateIndex(const int index) {
   requestUpdate();
 }
 
-void SettingsActivity::applyUiSettingChange(uint8_t CrossPointSettings::* valuePtr) {
-  if (valuePtr == &CrossPointSettings::uiFontMode) {
+void SettingsActivity::applyUiSettingChange(uint8_t CrossPointSettings::* valuePtr, const bool uiFontSelectionChanged) {
+  if (valuePtr == &CrossPointSettings::uiFontMode || uiFontSelectionChanged) {
     // The render task can be traversing the same font map or SD glyph cache.
     // Switching the alias may unload the current UI face, so serialize it with
     // rendering just like TextSettingsActivity's reader-family changes.
@@ -260,23 +269,30 @@ void SettingsActivity::toggleSelectedSetting() {
     }
     SETTINGS.*(setting.valuePtr) = (currentValue + 1) % static_cast<uint8_t>(enumLabels.size());
   } else if (setting.type == SettingType::ENUM && setting.valueGetter && setting.valueSetter) {
-    const uint8_t totalValues = setting.enumStringValues.empty()
-                                    ? static_cast<uint8_t>(setting.enumLabels().size())
-                                    : static_cast<uint8_t>(setting.enumStringValues.size());
-    const uint8_t cur = setting.valueGetter();
-    if (totalValues > 2) {
+    const auto& stringOptions = setting.enumStringOptions();
+    const uint16_t totalValues =
+        static_cast<uint16_t>(stringOptions.empty() ? setting.enumLabels().size() : stringOptions.size());
+    const uint16_t cur = setting.valueGetter();
+    const bool uiFontSelectionChanged = setting.nameId == StrId::STR_UI_FONT_SELECTION;
+    if (totalValues == 0) return;
+    if (totalValues > 2 || (uiFontSelectionChanged && totalValues > 1)) {
       const auto valueSetter = setting.valueSetter;
-      auto onSelect = [this, valueSetter, sleepScreenChanged, quickResumeTimeoutChanged, themeSetting](int idx) {
-        valueSetter(idx);
+      auto onSelect = [this, valueSetter, sleepScreenChanged, quickResumeTimeoutChanged, themeSetting,
+                       uiFontSelectionChanged, totalValues](int idx) {
+        if (idx < 0 || idx >= totalValues) return;
+        valueSetter(static_cast<uint16_t>(idx));
         // Dynamic theme setters reload UITheme themselves; rebuild this screen's
         // shared tokens just as the member-pointer enum path does.
         if (themeSetting) resetUi();
         syncQuickResumeTimeoutForSleepScreen(sleepScreenChanged, quickResumeTimeoutChanged);
         SETTINGS.saveToFile();
         rebuildSettings();
+        applyUiSettingChange(nullptr, uiFontSelectionChanged);
       };
-      if (!setting.enumStringValues.empty()) {
-        optionPopup.show(setting.nameId, setting.enumStringValues, cur, std::move(onSelect));
+      if (setting.sharedEnumStringValues) {
+        optionPopup.show(setting.nameId, setting.sharedEnumStringValues, cur, std::move(onSelect));
+      } else if (!stringOptions.empty()) {
+        optionPopup.show(setting.nameId, stringOptions, cur, std::move(onSelect));
       } else {
         const auto enumLabels = setting.enumLabels();
         optionPopup.show(setting.nameId, enumLabels.data(), static_cast<int>(enumLabels.size()), cur,
@@ -285,7 +301,7 @@ void SettingsActivity::toggleSelectedSetting() {
       requestUpdate();
       return;
     }
-    setting.valueSetter((cur + 1) % totalValues);
+    setting.valueSetter(static_cast<uint16_t>((cur + 1) % totalValues));
     if (themeSetting) resetUi();
   } else if (setting.type == SettingType::VALUE && setting.valuePtr != nullptr) {
     const int8_t currentValue = SETTINGS.*(setting.valuePtr);
@@ -436,8 +452,9 @@ void SettingsActivity::toggleSelectedSetting() {
   syncQuickResumeTimeoutForSleepScreen(sleepScreenChanged, quickResumeTimeoutChanged);
   SETTINGS.saveToFile();
   const auto valuePtr = setting.valuePtr;  // rebuildSettings() replaces `setting`
+  const bool uiFontSelectionChanged = setting.nameId == StrId::STR_UI_FONT_SELECTION;
   rebuildSettings();
-  applyUiSettingChange(valuePtr);
+  applyUiSettingChange(valuePtr, uiFontSelectionChanged);
   // Rows can appear/disappear with a change (e.g. the footnote-back toggle).
   nav.selected = std::min(selectedSetting, static_cast<int>(settings.size()) - 1);
 }
@@ -516,9 +533,18 @@ std::string SettingsActivity::settingValueText(const SettingInfo& setting) {
     return I18N.get(enumLabels[value]);
   }
   if (setting.type == SettingType::ENUM && setting.valueGetter) {
-    const uint8_t value = setting.valueGetter();
-    if (!setting.enumStringValues.empty() && value < setting.enumStringValues.size()) {
-      return setting.enumStringValues[value];
+    const uint16_t value = setting.valueGetter();
+    const auto& stringOptions = setting.enumStringOptions();
+    if (!stringOptions.empty() && value < stringOptions.size()) {
+      std::string valueText = stringOptions[value];
+      if (setting.nameId == StrId::STR_UI_FONT_SELECTION &&
+          SETTINGS.uiFontMode == CrossPointSettings::UI_FONT_SD_CARD && SETTINGS.uiSdFontPath[0] != '\0' &&
+          !sdFontSystem.hasActiveUiFontSelection()) {
+        const std::string unavailableText = I18N.get(
+            sdFontSystem.uiFontMetricsUnsupported() ? StrId::STR_UI_FONT_UNSUPPORTED : StrId::STR_FONT_UNAVAILABLE);
+        if (valueText.find(unavailableText) == std::string::npos) valueText += " (" + unavailableText + ")";
+      }
+      return valueText;
     }
     const auto enumLabels = setting.enumLabels();
     if (value < enumLabels.size()) {
@@ -555,7 +581,7 @@ void SettingsActivity::buildScreen(UiScreen& screen) {
     const auto& setting = settings[i];
     const auto labels = setting.enumLabels();
     const bool checkbox = setting.type == SettingType::TOGGLE ||
-                          (setting.type == SettingType::ENUM && setting.enumStringValues.empty() &&
+                          (setting.type == SettingType::ENUM && setting.enumStringOptions().empty() &&
                            labels.size() == 2 && labels[0] == StrId::STR_STATE_OFF && labels[1] == StrId::STR_STATE_ON);
     if (checkbox && (setting.valuePtr || setting.valueGetter)) {
       const bool checked = setting.valuePtr ? SETTINGS.*(setting.valuePtr) != 0 : setting.valueGetter() != 0;

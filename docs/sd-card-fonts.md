@@ -7,6 +7,28 @@ If CrossPoint enables external RAM on your device, you can load `.ttf`, `.otf`,
 and `.ttc` files directly. Otherwise, convert them to `.cpfont` files first.
 All devices can use `.cpfont` files.
 
+## Selecting an independent system UI font
+
+Install a `.cpfont` family under `/.fonts/<family>/` or `/fonts/<family>/` as
+described below. In **Settings > Display**, set **UI Font** to **SD Card Font**,
+then open **UI Font Selection** and choose the listed file path. The selector
+lists every discovered rasterized `.cpfont`, including each available size; it
+supports navigating long lists across popup pages, and does not change
+**Settings > Reader > Text Settings > Reader Font Family** or the EPUB/TXT body
+font.
+
+The UI currently accepts loaded faces with a renderer size and line advance
+from 8 through 40 pixels, ascender at most 40 pixels, descender from −20
+through 0 pixels, a total ascender/descender height at most 48 pixels, and an
+ascender no more than 12 pixels above the line advance.
+The CPFont header supplies the pixel metrics; the renderer size is derived from
+the registered file size because CPFont does not store a separate nominal point
+size. Every discovered `.cpfont` remains in the picker. A selected file outside
+the supported metric range remains saved and visible in Settings, while the
+built-in UI face is used and the value is marked unsupported. Missing or
+invalid files also fall back to the built-in UI face; the saved path is kept so
+it can be restored when the file is available again.
+
 ## Installing Fonts
 
 There are three ways to install `.cpfont` fonts. Direct TTF/OTF/TTC loading uses
@@ -17,7 +39,8 @@ the manual SD card copy method below.
 1. Connect your CrossPoint reader to Wi-Fi
 2. Go to **Settings > Reader > Manage Fonts**
 3. Browse available font families and tap to download
-4. Downloaded fonts appear immediately in **Settings > Reader > Font Family**
+4. Downloaded fonts appear immediately in
+   **Settings > Reader > Text Settings > Reader Font Family**
 
 ### Option 2: Upload via web browser
 
@@ -62,7 +85,7 @@ the manual SD card copy method below.
 If CrossPoint enables external RAM on your device, copy a `.ttf`, `.otf`, or
 `.ttc` file directly into `/fonts/` or `/.fonts/`. The filename without its
 extension becomes the family name. For example, `/fonts/Bookerly.ttf` appears as
-`Bookerly` in **Settings > Reader > Font Family**.
+`Bookerly` in **Settings > Reader > Text Settings > Reader Font Family**.
 
 For a family with separate styles, put its files in one subfolder. The folder
 name becomes the family name. For example:
@@ -130,11 +153,12 @@ When converting your own font, include the UI sizes:
 
 What this means in practice:
 
-- Select a non-Latin-capable SD font under **Settings > Reader > Font Family**
-  (see [Installing Fonts](#installing-fonts) and the interval presets for
-  `.cpfont` under [Converting Custom Fonts](#converting-custom-fonts)). That
-  single selection drives both book content *and* size-matched fallback in
-  the UI.
+- Select a non-Latin-capable SD font under
+  **Settings > Reader > Text Settings > Reader Font Family** (see
+  [Installing Fonts](#installing-fonts) and the interval presets for `.cpfont`
+  under [Converting Custom Fonts](#converting-custom-fonts)). Its family and
+  size drive book content; while **UI Font** is set to **Built-in Font**, that
+  family can also provide the existing size-matched UI script fallback.
 - Pure-Latin UI strings keep the crisp built-in font; only strings that
   actually contain a character the built-in font lacks are routed to the SD
   font.
@@ -142,37 +166,33 @@ What this means in practice:
   `三体 Vol.1` renders entirely in the SD font (including the Latin part). If
   that SD font is a `Mono` family, the Latin portion will appear half/full
   width.
-- If no SD font is selected (a built-in reading font is active), there is no
-  fallback and the UI again shows boxes for non-Latin text — pick an SD font
-  covering that script to restore it.
+- If the Reader uses a built-in font and **UI Font** is also set to **Built-in
+  Font**, no SD script fallback is active and UI strings can show boxes for
+  non-Latin text.
 
 ## Global UI Font
 
 **Settings > Display > UI Font** selects either the built-in UI font or an SD
-font. The mode change applies immediately; no reboot is needed. In SD mode, the
-currently selected pre-rasterized SD font family is used for system UI text
-when that family includes an **11 pt `.cpfont`**. If it does not, the built-in
-font remains primary and the existing 10 pt script fallback can still supply
-non-Latin UI glyphs when that family includes the required file. Direct vector
-`.ttf`/`.otf`/`.ttc` families keep their existing script-fallback behavior and
-are not promoted to the global UI face. The SD family continues to be chosen in
-**Settings > Reader > Text Settings > Reader Font Family**; the UI mode switch
-itself does not change EPUB/TXT font settings or rendering.
+font. The mode change applies immediately; no reboot is needed. In SD mode,
+**UI Font Selection** chooses one exact rasterized `.cpfont` file discovered
+under `/.fonts/` or `/fonts/`; every registered size is listed without a
+filename-size filter. This path is separate from the family selected in
+**Settings > Reader > Text Settings > Reader Font Family**. Changing either
+selection does not change the other setting or EPUB/TXT body rendering.
 
-The built-in UI face has a 25 px line advance. The 11 pt UI variant is the
-closest metric match for the tested Sam3KRFont builds and matches sampled
-Hangul glyph dimensions from the 23 pt `.epdfont` reference. If an 11 pt SD UI
-font lacks any glyph in a string, that whole string uses the built-in font so
-mixed text does not show holes. This renderer routes complete strings rather
-than mixing fonts per glyph.
+After loading, the selected file is checked against the supported system-UI
+metric range described above. An unsupported file stays selected but uses the
+built-in UI font and is marked in Settings. A missing, corrupt, or unreadable
+file also falls back to the built-in face while retaining the saved path. When
+the SD font override is active, strings with missing glyphs use the complete
+built-in string so mixed text does not show holes; the renderer does not mix
+fonts within one string.
 
-When converting a family for both UI and body use, include the 11 pt UI face
-alongside the sizes needed for reading. For example:
-
-    python3 lib/EpdFont/scripts/fontconvert_sdcard.py \
-      Sam3KRFont.ttf --intervals ascii,hangul,cjk \
-      --sizes 10,11,12,14,16,18 --style regular \
-      --name Sam3KRFont --output-dir ./Sam3KRFont/
+In built-in UI mode, the existing size-matched script fallback from the
+Reader's selected SD family remains available. The explicit UI font mode takes
+precedence when enabled. Direct vector `.ttf`/`.otf`/`.ttc` families retain
+their existing Reader/UI fallback behavior and are not offered by the CPFont
+file selector.
 
 ## Available Pre-Built Fonts
 

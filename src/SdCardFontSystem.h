@@ -38,8 +38,12 @@ class SdCardFontSystem {
   /// Also re-discovers if the registry has been marked dirty (e.g. by web upload).
   void ensureLoaded(GfxRenderer& renderer);
 
-  /// Apply the persisted global UI font mode to the current SD font family.
-  void applyUiFontMode(GfxRenderer& renderer);
+  /// Apply the persisted global UI font mode and independent SD UI file path.
+  void applyUiFontMode(GfxRenderer& renderer, bool forceReload = false);
+
+  /// True when the explicitly selected UI CPFont loaded and passed its metric checks.
+  bool hasActiveUiFontSelection() const { return uiPrimaryFontId_ != 0; }
+  bool uiFontMetricsUnsupported() const { return uiFontMetricsUnsupported_; }
 
   /// Resolve an SD card font ID from family name + reader point size.
   /// Returns 0 if not found. Used by CrossPointSettings::getReaderFontId().
@@ -58,11 +62,8 @@ class SdCardFontSystem {
   /// If the registry is dirty, re-scan the SD card now and clear the flag.
   /// Used by the web UI so uploaded/deleted fonts appear in the list
   /// without waiting for the reader activity to run ensureLoaded().
-  void refreshIfDirty() {
-    if (registryDirty_.exchange(false, std::memory_order_acquire)) {
-      registry_.discover();
-    }
-  }
+  bool refreshIfDirty();
+  bool consumeUiFontReapplyRequest() { return uiFontReapplyPending_.exchange(false, std::memory_order_acq_rel); }
 
  private:
   // Load the active SD family at the built-in UI point sizes and register each
@@ -73,7 +74,7 @@ class SdCardFontSystem {
   // reused).
   void setupUiFallbacks(GfxRenderer& renderer);
   void setupUiScriptFallbacks(GfxRenderer& renderer);
-  void setupUiPrimaryFont(GfxRenderer& renderer);
+  void setupUiPrimaryFont(GfxRenderer& renderer, bool forceReload = false);
   void clearUiPrimaryFont(GfxRenderer& renderer);
   void clearUiScriptFallback(GfxRenderer& renderer);
 
@@ -120,12 +121,17 @@ class SdCardFontSystem {
   GfxRenderer* renderer_ = nullptr;
   int uiPrimaryFontId_ = 0;
   bool uiPrimaryFontOwned_ = false;
+  std::string uiPrimaryPath_;
+  bool uiFontMetricsUnsupported_ = false;
   int uiFallbackFontId_ = 0;
   bool uiFallbackFontOwned_ = false;
 
   SdCardFontRegistry registry_;
   SdCardFontManager manager_;
+  SdCardFontManager uiFontManager_;
   std::atomic<bool> registryDirty_{false};
+  std::atomic<bool> readerFontReloadPending_{false};
+  std::atomic<bool> uiFontReapplyPending_{false};
 
 #if CROSSPOINT_VECTOR_FONTS
   // One style source file. SMALL files are read fully into `bytes` (resident,

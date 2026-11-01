@@ -1,5 +1,6 @@
 #include <HalStorage.h>
 #include <SdCardFontRegistry.h>
+#include <UiFontSelection.h>
 #include <gtest/gtest.h>
 
 #include <cstdlib>
@@ -141,6 +142,23 @@ TEST_F(SdFontRegistryTest, FilePathReportsTruncation) {
   char tiny[16];
   EXPECT_FALSE(family->filePath(family->files[0], tiny, sizeof(tiny)));
   EXPECT_EQ(tiny[sizeof(tiny) - 1], '\0');
+}
+
+TEST_F(SdFontRegistryTest, UiSelectionResolvesExactCpfontPathAndSize) {
+  fake::add("/.fonts/Sam3KRFont/Sam3KRFont_11.cpfont");
+  fake::add("/.fonts/Sam3KRFont/Sam3KRFont_23.cpfont");
+  ASSERT_TRUE(registry.discover());
+
+  const SdCardFontFamilyInfo* family = nullptr;
+  const SdCardFontFileInfo* file = nullptr;
+  ASSERT_TRUE(uiFontSelection::findCpfontByPath(registry.getFamilies(), "/.fonts/Sam3KRFont/Sam3KRFont_23.cpfont",
+                                                family, file));
+  ASSERT_NE(family, nullptr);
+  ASSERT_NE(file, nullptr);
+  EXPECT_EQ(file->pointSize, 23);
+  EXPECT_EQ(pathOf(*family, *file), "/.fonts/Sam3KRFont/Sam3KRFont_23.cpfont");
+  EXPECT_FALSE(
+      uiFontSelection::findCpfontByPath(registry.getFamilies(), "/.fonts/Sam3KRFont/missing.cpfont", family, file));
 }
 
 }  // namespace
