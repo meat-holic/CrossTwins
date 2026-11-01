@@ -24,8 +24,7 @@ inline size_t visibleCountForHeight(const size_t total, const size_t maximum, co
 
   const size_t rowStride = buttonHeight + gap;
   const size_t fitting = 1 + (availableHeight - firstRowHeight) / rowStride;
-  return fitting < total ? (fitting < maximum ? fitting : maximum)
-                         : (total < maximum ? total : maximum);
+  return fitting < total ? (fitting < maximum ? fitting : maximum) : (total < maximum ? total : maximum);
 }
 
 inline Window windowForSelection(const size_t total, const size_t selected,

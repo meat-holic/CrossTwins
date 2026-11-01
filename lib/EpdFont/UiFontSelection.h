@@ -8,7 +8,7 @@
 namespace uiFontSelection {
 
 inline bool shouldDeferLegacyMigration(const bool hasSavedUiPath, const bool sdUiEnabled,
-                                      const char* readerFamilyName) {
+                                       const char* readerFamilyName) {
   return !hasSavedUiPath && sdUiEnabled && readerFamilyName && *readerFamilyName != '\0';
 }
 

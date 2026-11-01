@@ -48,7 +48,7 @@ TEST(NormalisePath, CollapsesParentReferenceWithinPath) {
 TEST(NormalisePath, DropsLeadingParentReferencesPastRoot) { EXPECT_EQ(FsHelpers::normalisePath("/../../etc"), "etc"); }
 
 TEST(GetFileNameWithoutExtension, ReturnsFontBasenameWithoutDirectoryOrExtension) {
-  EXPECT_EQ(FsHelpers::getFileNameWithoutExtension(std::string_view{ "/.fonts/Sam3/Sam3KRFont_13.cpfont" }),
+  EXPECT_EQ(FsHelpers::getFileNameWithoutExtension(std::string_view{"/.fonts/Sam3/Sam3KRFont_13.cpfont"}),
             "Sam3KRFont_13");
 }
 
