@@ -4,7 +4,20 @@
 
 CrossTwins is a Korean-focused CrossPoint Reader firmware fork for supported e-readers. It keeps the reader open and hackable while restoring the CrossTwins logo, OTA update path, and release assets for this project.
 
-### Now running on:
+## CrossTwins 2.0.0
+
+CrossTwins 2.0.0 is based on CrossPoint Reader 2.0.0 and keeps the Korean-first workflow developed for this fork. Features already present in the RC3 line include:
+
+- English and Korean UI, Pretendard UI font, CJK text handling, and user fonts loaded from the SD card.
+- EPUB paragraph indentation, wrapped long titles, natural sorting of numbered filenames, and next-book navigation.
+- Recent-book progress in the Lyra home screen and an image slideshow for BMP and PNG files.
+- BLE page turners with configurable key mappings, plus the existing Wi-Fi, Web UI, and OTA workflows.
+
+The Gallaemok DOS home theme was ported after RC3 and is retained alongside Lyra and the other registered themes.
+
+Firmware builds target X3/X4, X4 Pro, X4C, Sticky, PaperMono, Metalio E-Ink 4, eego A4, and Picco. Build support does not by itself confirm behavior on a physical device; release notes identify any device checks that were not performed.
+
+### Build targets include:
 
 - **ESP32C3-based** Xteink X4 and X3.
 - **ESP32S3-based** Xteink X4Pro and X4Classic, Seeed reTerminal Sticky, M5PaperMono, Metalio E-Ink 4, EEGOREAD A4 and Boox Picco.
