@@ -10,6 +10,10 @@
 // and a pretend heap.
 namespace bleturner {
 
+// pick 0 asks the SDK to retry only the saved peer. pick 1 leaves its
+// round-robin reconnect over all saved bonds in place.
+constexpr bool shouldArmSelectedPeerReconnect(const uint8_t pick) { return pick == 0; }
+
 // X3 numbers (the default profile below; the S3 has its own). The stack needs both to start; after it
 // started the reader still needs one 32 KiB block (InflateReader::RING_BYTES and the streaming miniz
 // window). Under kMinimumFreeBytes the heap is short in total; above it a refusal counts as a heap in

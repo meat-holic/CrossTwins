@@ -229,7 +229,7 @@ void drainRemote() {
   }
 }
 
-// Once per visit: the SDK finds a bonded remote again only after this.
+// Once per visit, apply the configured SDK reconnect policy before the first poll.
 void armReconnectOnce() {
   if (visit.reconnectArmed || port::stopping()) return;
   visit.reconnectArmed = true;

@@ -171,5 +171,13 @@ TEST(RadioVerdictTest, IdleRearmNeedsBookEntryOrConnectRequest) {
   EXPECT_FALSE(radioRearmWanted(false, false, false, false));
 }
 
+TEST(RadioReconnectPolicyTest, FirstRemotePolicyLeavesSdkBondRotationActive) {
+  EXPECT_FALSE(shouldArmSelectedPeerReconnect(1));
+}
+
+TEST(RadioReconnectPolicyTest, ChosenRemotePolicyArmsSelectedPeerPlan) {
+  EXPECT_TRUE(shouldArmSelectedPeerReconnect(0));
+}
+
 }  // namespace
 }  // namespace bleturner
