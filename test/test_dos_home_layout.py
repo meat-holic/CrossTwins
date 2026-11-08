@@ -15,8 +15,10 @@ HARNESS = r"""
 using dos_layout::FontMetrics;
 using dos_layout::Geometry;
 
-static void check(int width, int height, int lineHeight, int topInset, int headerOffsetY, bool print) {
-  const FontMetrics font{lineHeight, lineHeight, lineHeight, lineHeight, lineHeight, 20, topInset, headerOffsetY};
+static void check(int width, int height, int lineHeight, int topInset, int headerOffsetY, int memoryRows, int cpuRows,
+                  bool print) {
+  const FontMetrics font{lineHeight, lineHeight, lineHeight, lineHeight, lineHeight, 20, topInset, headerOffsetY,
+                        memoryRows, cpuRows};
   const int recentLimit = dos_layout::recentBookLimit(width, height, font);
   assert(recentLimit >= 0);
   assert(recentLimit <= dos_layout::MAX_RECENT_BOOKS);
@@ -36,17 +38,20 @@ static void check(int width, int height, int lineHeight, int topInset, int heade
     assert(g.recentBookCount == recentCount);
     assert(g.header.y >= 0 && g.header.y + g.header.height <= height);
     assert(g.header.y >= topInset);
-    assert(g.titleY >= std::max(0, g.header.y + font.headerOffsetY) + font.statusStripHeight);
-    assert(g.titleY + font.titleLineHeight <= g.memoryY);
-    assert(g.memoryY + font.sectionLineHeight <= g.separatorY);
+    const int statusTop = std::max(0, g.header.y + headerOffsetY);
+    assert(g.topSeparatorY >= statusTop + font.statusStripHeight);
+    assert(g.topSeparatorY + font.sectionLineHeight <= g.titleY);
+    assert(g.titleY + font.titleLineHeight <= g.separatorY);
     assert(g.separatorY + font.sectionLineHeight <= g.header.y + g.header.height);
     assert(g.recent.y == g.header.y + g.header.height);
     assert(g.recent.y + g.recent.height == g.menu.y);
     assert(g.menu.y + g.menu.height <= height);
     assert(g.footer.y >= 0 && g.footer.y + g.footer.height <= height);
     assert(g.header.y == reference.header.y && g.header.height == reference.header.height);
-    assert(g.titleY == reference.titleY && g.memoryY == reference.memoryY && g.separatorY == reference.separatorY);
+    assert(g.topSeparatorY == reference.topSeparatorY && g.titleY == reference.titleY &&
+           g.separatorY == reference.separatorY);
     assert(g.footer.y == reference.footer.y && g.promptY == reference.promptY);
+    assert(g.sysInfoMemoryRows == memoryRows && g.sysInfoCpuRows == cpuRows);
     assert(g.contentX >= 0 && g.contentX < width / 2);
     assert(g.selectionX >= 0 && g.selectionX + g.selectionWidth <= width);
 
@@ -91,15 +96,24 @@ static void check(int width, int height, int lineHeight, int topInset, int heade
       assert(step - rowHeight <= std::max(2, lineHeight / 4));
       assert(g.menuRowsTop >= g.menuLabelY + lineHeight);
       assert(rowsBottom <= g.menuRowsBottom);
-      assert(rowsBottom <= g.promptY - g.sectionGap);
+      assert(rowsBottom <= g.menuRowsBottom);
     }
-    assert(g.promptY + lineHeight <= g.footer.y);
+    assert(g.menuRowsBottom + g.sectionGap <= g.sysInfoLabelY);
+    assert(g.sysInfo.y == g.sysInfoLabelY);
+    assert(g.sysInfoLabelY + lineHeight <= g.sysInfoMemoryY);
+    const int memoryBottom = g.sysInfoMemoryY + (g.sysInfoMemoryRows - 1) * g.sysInfoMemoryRowStep + lineHeight;
+    assert(memoryBottom <= g.sysInfoCpuY);
+    const int cpuBottom = g.sysInfoCpuY + (g.sysInfoCpuRows - 1) * g.sysInfoCpuRowStep + lineHeight;
+    assert(cpuBottom <= g.promptY);
+    assert(g.promptY + lineHeight <= g.footer.y - g.sectionGap);
+    assert(g.sysInfo.y + g.sysInfo.height == g.promptY + lineHeight);
 
     if (print && recentCount == recentLimit) {
-      std::printf("%dx%d: header=[%d,%d) recent%d=[%d,%d) syntax=%d menu=[%d,%d) rows=%d/%d prompt=%d footer=[%d,%d)\n",
+      std::printf("%dx%d: header=[%d,%d) recent%d=[%d,%d) syntax=%d menu=[%d,%d) rows=%d/%d sysinfo=[%d,%d) lines=%d+%d prompt=%d footer=[%d,%d)\n",
                   width, height, g.header.y, g.header.y + g.header.height, recentCount, g.recent.y,
                   g.recent.y + g.recent.height, g.syntaxErrorY, g.menu.y, g.menu.y + g.menu.height,
-                  g.menuRowsTop, dos_layout::menuRowStep(g, 4), g.promptY, g.footer.y, g.footer.y + g.footer.height);
+                  g.menuRowsTop, dos_layout::menuRowStep(g, 4), g.sysInfo.y, g.sysInfo.y + g.sysInfo.height,
+                  g.sysInfoMemoryRows, g.sysInfoCpuRows, g.promptY, g.footer.y, g.footer.y + g.footer.height);
     }
   }
 }
@@ -108,15 +122,23 @@ int main() {
   // Board panel sizes are supplied in logical orientation by GfxRenderer.
   const int dimensions[][2] = {{480, 800}, {800, 480}, {528, 792}, {792, 528}};
   for (const auto& size : dimensions) {
+    const int memoryRows = size[0] < 600 ? 3 : 1;
+    const int cpuRows = size[0] < 600 ? 2 : 1;
     for (int lineHeight = 8; lineHeight <= 24; lineHeight += 4) {
-      check(size[0], size[1], lineHeight, 12, 0, lineHeight == 20);
+      check(size[0], size[1], lineHeight, 12, 0, memoryRows, cpuRows, lineHeight == 20);
     }
   }
-  check(480, 800, 20, 24, 6, true);
+  check(480, 800, 20, 24, 6, 3, 2, true);
 
-  char memoryLabel[32];
-  dos_layout::formatFreeHeapLabel(memoryLabel, sizeof(memoryLabel), 243U * 1024U + 1023U);
-  assert(std::strcmp(memoryLabel, "243K bytes free") == 0);
+  char uptimeLabel[32];
+  dos_layout::formatUptimeLabel(uptimeLabel, sizeof(uptimeLabel), 0);
+  assert(std::strcmp(uptimeLabel, "UP 00:00:00") == 0);
+  dos_layout::formatUptimeLabel(uptimeLabel, sizeof(uptimeLabel), 9107);
+  assert(std::strcmp(uptimeLabel, "UP 02:31:47") == 0);
+  dos_layout::formatUptimeLabel(uptimeLabel, sizeof(uptimeLabel), 123ULL * 3600ULL + 2ULL * 60ULL + 3ULL);
+  assert(std::strcmp(uptimeLabel, "UP 123:02:03") == 0);
+  dos_layout::formatUptimeLabel(uptimeLabel, sizeof(uptimeLabel), UINT64_MAX);
+  assert(std::strncmp(uptimeLabel, "UP ", 3) == 0);
   const int availableRuleWidth = 480 - 2 * 18;
   const int ruleCount = dos_layout::asciiRuleCharacterCount(480, 18, 6, 255);
   assert(ruleCount > 0);

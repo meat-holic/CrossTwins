@@ -14,6 +14,9 @@ CrossTwins 2.0.0 is based on CrossPoint Reader 2.0.0 and keeps the Korean-first 
 - BLE page turners with configurable key mappings, plus the existing Wi-Fi, Web UI, and OTA workflows.
 
 The Gallaemok DOS home theme was ported after RC3 and is retained alongside Lyra and the other registered themes.
+Its home screen includes a sysinfo panel for free and largest contiguous default heap, CPU clock frequency in MHz (not
+utilization), uptime, and the internal SoC temperature when supported; unsupported or failed temperature readings are
+marked unavailable.
 
 Firmware builds target X3/X4, X4 Pro, X4C, Sticky, PaperMono, Metalio E-Ink 4, eego A4, and Picco. Build support does not by itself confirm behavior on a physical device; release notes identify any device checks that were not performed.
 

@@ -5,17 +5,39 @@
 #include "Arduino.h"
 #include "HalStorage.h"
 #include "Logging.h"
+#include "driver/temperature_sensor.h"
 #include "esp_debug_helpers.h"
 #include "esp_memory_utils.h"
 #include "esp_private/esp_cpu_internal.h"
 #include "esp_private/esp_system_attr.h"
 #include "esp_private/panic_internal.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
+#include "soc/soc_caps.h"
 #if !__riscv
 #include <xtensa_context.h>  // XtExcFrame for the stack capture below
 #endif
 
 #define MAX_PANIC_STACK_DEPTH 32
 #define PANIC_CAPTURE_MAGIC 0x50414E49u
+
+#if SOC_TEMP_SENSOR_SUPPORTED
+namespace {
+// Serialize the full driver lifecycle without a heap allocation at boot.
+StaticSemaphore_t temperatureSensorMutexStorage;
+const SemaphoreHandle_t temperatureSensorMutex = xSemaphoreCreateMutexStatic(&temperatureSensorMutexStorage);
+
+class TemperatureSensorMutexGuard {
+  SemaphoreHandle_t mutex;
+
+ public:
+  explicit TemperatureSensorMutexGuard(SemaphoreHandle_t mutex) : mutex(mutex) {}
+  ~TemperatureSensorMutexGuard() {
+    if (mutex && xSemaphoreGive(mutex) != pdTRUE) LOG_ERR("SYS", "Cannot unlock SoC temperature sensor");
+  }
+};
+}  // namespace
+#endif
 
 RTC_NOINIT_ATTR char panicMessage[256];
 RTC_NOINIT_ATTR HalSystem::StackFrame panicStack[MAX_PANIC_STACK_DEPTH];
@@ -203,6 +225,53 @@ bool isRebootFromPanic() {
   const bool watchdogReset =
       resetReason == ESP_RST_INT_WDT || resetReason == ESP_RST_TASK_WDT || resetReason == ESP_RST_WDT;
   return watchdogReset && panicCaptureMarker == PANIC_CAPTURE_MAGIC;
+}
+
+bool readInternalTemperatureCelsius(float& celsius) {
+#if SOC_TEMP_SENSOR_SUPPORTED
+  if (!temperatureSensorMutex || xSemaphoreTake(temperatureSensorMutex, portMAX_DELAY) != pdTRUE) {
+    LOG_ERR("SYS", "Cannot lock SoC temperature sensor");
+    return false;
+  }
+  const TemperatureSensorMutexGuard lock(temperatureSensorMutex);
+
+  temperature_sensor_config_t config{};
+  config.range_min = 10;
+  config.range_max = 50;
+  config.clk_src = TEMPERATURE_SENSOR_CLK_SRC_DEFAULT;
+  config.flags.allow_pd = 0;
+
+  temperature_sensor_handle_t sensor = nullptr;
+  const esp_err_t installResult = temperature_sensor_install(&config, &sensor);
+  if (installResult != ESP_OK || !sensor) {
+    LOG_ERR("SYS", "Cannot install SoC temperature sensor: %s", esp_err_to_name(installResult));
+    if (sensor && temperature_sensor_uninstall(sensor) != ESP_OK)
+      LOG_ERR("SYS", "Cannot uninstall partially installed SoC temperature sensor");
+    return false;
+  }
+
+  const esp_err_t enableResult = temperature_sensor_enable(sensor);
+  float reading = 0.0f;
+  const esp_err_t readResult = enableResult == ESP_OK ? temperature_sensor_get_celsius(sensor, &reading) : enableResult;
+  const esp_err_t disableResult = enableResult == ESP_OK ? temperature_sensor_disable(sensor) : ESP_OK;
+  const esp_err_t uninstallResult = temperature_sensor_uninstall(sensor);
+  if (enableResult != ESP_OK || readResult != ESP_OK || disableResult != ESP_OK || uninstallResult != ESP_OK) {
+    LOG_ERR("SYS", "SoC temperature read failed: enable=%s read=%s disable=%s uninstall=%s",
+            esp_err_to_name(enableResult), esp_err_to_name(readResult), esp_err_to_name(disableResult),
+            esp_err_to_name(uninstallResult));
+    return false;
+  }
+  if (!(reading >= -100.0f && reading <= 200.0f)) {
+    LOG_ERR("SYS", "SoC temperature sensor returned an invalid reading");
+    return false;
+  }
+
+  celsius = reading;
+  return true;
+#else
+  (void)celsius;
+  return false;
+#endif
 }
 
 }  // namespace HalSystem

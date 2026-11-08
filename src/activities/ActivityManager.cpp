@@ -196,6 +196,8 @@ void ActivityManager::loop() {
 
         // Request an update to ensure the popped activity gets re-rendered
         if (pendingAction == PendingAction::None) {
+          lock.unlock();  // onResume may acquire its own render lock
+          currentActivity->onResume();
           requestUpdate();
         }
 

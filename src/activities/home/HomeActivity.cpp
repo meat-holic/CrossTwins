@@ -291,10 +291,17 @@ void HomeActivity::configureForTheme(const bool preserveSelection) {
 
 void HomeActivity::onEnter() {
   Activity::onEnter();
+  if (UITheme::getInstance().isThemeActive(CrossPointSettings::DOS)) DosTheme::refreshHomeSystemInfo(renderer);
   configureForTheme(false);
 
   // Trigger first update
   requestUpdate();
+}
+
+void HomeActivity::onResume() {
+  if (configuredTheme == SETTINGS.uiTheme && UITheme::getInstance().isThemeActive(CrossPointSettings::DOS)) {
+    DosTheme::refreshHomeSystemInfo(renderer);
+  }
 }
 
 void HomeActivity::onExit() {
@@ -344,6 +351,7 @@ void HomeActivity::freeCoverBuffer() {
 
 void HomeActivity::loop() {
   if (configuredTheme != SETTINGS.uiTheme) {
+    if (UITheme::getInstance().isThemeActive(CrossPointSettings::DOS)) DosTheme::refreshHomeSystemInfo(renderer);
     configureForTheme(true);
     requestUpdate();
     return;
@@ -528,10 +536,10 @@ void HomeActivity::render(RenderLock&&) {
   // theme-specific home state and requests the matching render.
   if (configuredTheme != SETTINGS.uiTheme) return;
 
+  const bool dosTheme = UITheme::getInstance().isThemeActive(CrossPointSettings::DOS);
   const auto& metrics = UITheme::getInstance().getMetrics();
   const auto pageWidth = renderer.getScreenWidth();
   const auto pageHeight = renderer.getScreenHeight();
-  const bool dosTheme = UITheme::getInstance().isThemeActive(CrossPointSettings::DOS);
   const DosHomeLayout dosLayout =
       dosTheme ? DosTheme::homeLayout(renderer, static_cast<int>(recentBooks.size())) : DosHomeLayout{};
   // Content columns clear the bezel insets on rounded panels. The header

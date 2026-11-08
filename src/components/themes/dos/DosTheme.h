@@ -24,9 +24,10 @@ struct DosHomeLayout {
       : header(0, 0, 0, 0),
         recent(0, 0, 0, 0),
         menu(0, 0, 0, 0),
+        sysInfo(0, 0, 0, 0),
         footer(0, 0, 0, 0),
+        topSeparatorY(0),
         titleY(0),
-        memoryY(0),
         separatorY(0),
         contentX(0),
         selectionX(0),
@@ -43,15 +44,23 @@ struct DosHomeLayout {
         menuRowStep(0),
         menuPreferredRowStep(0),
         menuRowsBottom(0),
+        sysInfoLabelY(0),
+        sysInfoMemoryY(0),
+        sysInfoMemoryRowStep(0),
+        sysInfoCpuY(0),
+        sysInfoCpuRowStep(0),
+        sysInfoMemoryRows(0),
+        sysInfoCpuRows(0),
         sectionGap(0),
         promptY(0) {}
 
   Rect header;
   Rect recent;
   Rect menu;
+  Rect sysInfo;
   Rect footer;
+  int topSeparatorY;
   int titleY;
-  int memoryY;
   int separatorY;
   int contentX;
   int selectionX;
@@ -68,6 +77,13 @@ struct DosHomeLayout {
   int menuRowStep;
   int menuPreferredRowStep;
   int menuRowsBottom;
+  int sysInfoLabelY;
+  int sysInfoMemoryY;
+  int sysInfoMemoryRowStep;
+  int sysInfoCpuY;
+  int sysInfoCpuRowStep;
+  int sysInfoMemoryRows;
+  int sysInfoCpuRows;
   int sectionGap;
   int promptY;
 };
@@ -75,6 +91,7 @@ struct DosHomeLayout {
 class DosTheme final : public BaseTheme {
  public:
   static DosHomeLayout homeLayout(const GfxRenderer& renderer, int recentBookCount = -1);
+  static void refreshHomeSystemInfo(const GfxRenderer& renderer);
   static int recentBooksLimit(const GfxRenderer& renderer);
   static int homeMenuRowHeight(const GfxRenderer& renderer, int itemCount, int recentBookCount = -1);
   static int homeMenuRowStep(const GfxRenderer& renderer, int itemCount, int recentBookCount = -1);
