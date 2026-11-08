@@ -17,6 +17,7 @@
 #include "components/themes/dos/DosTheme.h"
 #include "components/themes/lyra/Lyra3CoversTheme.h"
 #include "components/themes/lyra/LyraTheme.h"
+#include "components/themes/minimal/MinimalTheme.h"
 #include "components/themes/roundedraff/RoundedRaffTheme.h"
 
 UITheme UITheme::instance;
@@ -85,6 +86,17 @@ void UITheme::setTheme(CrossPointSettings::UI_THEME type) {
       currentTheme = std::move(theme);
       currentMetrics = &DosMetrics::values;
       LOG_DBG("UI", "Using Gallaemok DOS theme");
+      break;
+    }
+    case CrossPointSettings::UI_THEME::MINIMAL: {
+      auto theme = makeUniqueNoThrow<MinimalTheme>();
+      if (!theme) {
+        LOG_ERR("UI", "OOM: Minimal theme");
+        return;
+      }
+      currentTheme = std::move(theme);
+      currentMetrics = &MinimalMetrics::values;
+      LOG_DBG("UI", "Using Minimal theme");
       break;
     }
   }

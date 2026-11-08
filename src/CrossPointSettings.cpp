@@ -16,9 +16,13 @@
 #include "ReaderLineSpacing.h"
 #include "SettingsList.h"
 #include "fontIds.h"
+#include "util/MinimalHomeSettingsJson.h"
 #include "util/ParagraphIndentMigration.h"
 #include "util/PluginLocations.h"
 #include "util/ReaderLineSpacingJson.h"
+
+static_assert(minimal_home_settings::kAlignmentCount == CrossPointSettings::MINIMAL_MENU_ALIGNMENT_COUNT);
+static_assert(minimal_home_settings::kDefaultAlignment == CrossPointSettings::MINIMAL_MENU_ALIGN_LEFT);
 
 namespace {
 
@@ -114,6 +118,7 @@ void CrossPointSettings::toJson(JsonDocument& doc) const {
   doc["shortPwrBtn"] = shortPwrBtn;
   // The theme picker maps display positions separately on boards without PSRAM.
   doc["uiTheme"] = uiTheme;
+  minimal_home_settings::writeJson(doc, minimalMenuAlignment, minimalHomeBackgroundPath);
 
   // Language -- managed by LanguageSelectActivity, not in SettingsList.
   // Stored as an ISO code string for stability across enum reorders.
@@ -199,8 +204,10 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
   };
   forEachBaseSetting(visit);
   const uint8_t storedTheme = doc["uiTheme"] | static_cast<uint8_t>(uiTheme);
-  uiTheme = clamp(storedTheme, static_cast<uint8_t>(DOS + 1), LYRA);
+  uiTheme = clamp(storedTheme, static_cast<uint8_t>(UI_THEME_COUNT), LYRA);
   if (storedTheme != uiTheme) needsResave = true;
+  needsResave |= minimal_home_settings::readJson(doc, minimalMenuAlignment, minimalHomeBackgroundPath,
+                                                 sizeof(minimalHomeBackgroundPath));
   needsResave |= reader_line_spacing::readJson(doc, lineSpacing, LINE_COMPRESSION_COUNT, LINE_SPACING_120);
 
   // Plugin System did not exist in older settings files. Preserve the behavior

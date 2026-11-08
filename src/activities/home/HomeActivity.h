@@ -7,6 +7,7 @@
 #include "RecentBooksStore.h"
 #include "activities/Activity.h"
 #include "components/CoverGridHomeUi.h"
+#include "components/themes/minimal/MinimalSelectionRedraw.h"
 #include "util/BookProgress.h"
 #include "util/ButtonNavigator.h"
 
@@ -19,6 +20,7 @@ class HomeActivity final : public Activity {
   bool recentsLoading = false;
   bool recentsLoaded = false;
   bool firstRenderDone = false;
+  minimal_home::SelectionRedraw minimalSelectionRedraw;
   bool hasOpdsServers = false;
   bool hasPlugins = false;
   // The home "library" slot (index 2) shows Plugins when any plugin is
@@ -83,6 +85,7 @@ class HomeActivity final : public Activity {
   void freeCoverBuffer();     // Free the stored cover buffer
   void loadRecentBooks(int maxBooks);
   void configureForTheme(bool preserveSelection);
+  void setSelectorIndex(int index);
   void loadRecentCovers(int coverHeight);
   void fillCoverGridFromLibrary();
   void resolveGridCoverPaths();
@@ -98,5 +101,6 @@ class HomeActivity final : public Activity {
   void onExit() override;
   void loop() override;
   void render(RenderLock&&) override;
+  void onResume() override;
   bool isHomeActivity() const override { return true; }
 };

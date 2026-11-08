@@ -1,10 +1,12 @@
 #include "SettingsActivity.h"
 
+#include <Bitmap.h>
 #include <BlePageTurner.h>
 #include <BoardConfig.h>
 #include <GfxRenderer.h>
 #include <HalClock.h>
 #include <HalDisplay.h>
+#include <HalStorage.h>
 #include <Logging.h>
 #include <Memory.h>
 #include <WiFi.h>
@@ -33,6 +35,7 @@
 #include "SilentRestart.h"
 #include "StatusBarSettingsActivity.h"
 #include "TextSettingsActivity.h"
+#include "activities/home/FileBrowserActivity.h"
 #include "activities/network/WifiSelectionActivity.h"
 #include "activities/util/IntervalSelectionActivity.h"
 #include "components/UITheme.h"
@@ -110,6 +113,11 @@ void SettingsActivity::rebuildSettings() {
   addAction(SettingsSection::General, StrId::STR_LANGUAGE, SettingAction::Language);
   addAction(SettingsSection::General, StrId::STR_KEYBOARD_LAYOUTS, SettingAction::KeyboardLayouts);
   addAction(SettingsSection::Display, StrId::STR_SLIDESHOW_INTERVAL, SettingAction::SlideshowInterval);
+  if (section == SettingsSection::Display && SETTINGS.uiTheme == CrossPointSettings::MINIMAL) {
+    addAction(SettingsSection::Display, StrId::STR_MENU_ALIGNMENT, SettingAction::MinimalMenuAlignment);
+    addAction(SettingsSection::Display, StrId::STR_BACKGROUND_IMAGE, SettingAction::MinimalBackgroundImage);
+    addAction(SettingsSection::Display, StrId::STR_CLEAR_BACKGROUND_IMAGE, SettingAction::MinimalClearBackgroundImage);
+  }
   addAction(SettingsSection::Reader, StrId::STR_TEXT_SETTINGS, SettingAction::TextSettings);
   addAction(SettingsSection::Reader, StrId::STR_MANAGE_FONTS, SettingAction::DownloadFonts);
   if (BoardConfig::hasHomeKey()) {
@@ -415,6 +423,58 @@ void SettingsActivity::toggleSelectedSetting() {
       case SettingAction::SlideshowInterval:
         openSlideshowIntervalPicker();
         return;
+      case SettingAction::MinimalMenuAlignment: {
+        static constexpr StrId OPTIONS[] = {StrId::STR_ALIGN_LEFT, StrId::STR_CENTER, StrId::STR_ALIGN_RIGHT};
+        optionPopup.show(StrId::STR_MENU_ALIGNMENT, OPTIONS, 3, SETTINGS.minimalMenuAlignment, [this](const int idx) {
+          SETTINGS.minimalMenuAlignment = static_cast<uint8_t>(idx);
+          SETTINGS.saveToFile();
+          rebuildSettings();
+        });
+        requestUpdate();
+        return;
+      }
+      case SettingAction::MinimalBackgroundImage: {
+        auto picker = makeUniqueNoThrow<FileBrowserActivity>(renderer, mappedInput, "/",
+                                                             FileBrowserActivity::Mode::PickBackgroundImage);
+        if (!picker) {
+          LOG_ERR("SETTINGS", "OOM: Minimal background image picker");
+          return;
+        }
+        startActivityForResult(std::move(picker), [this](const ActivityResult& result) {
+          if (!result.isCancelled) {
+            const auto* selected = std::get_if<FilePathResult>(&result.data);
+            if (!selected || selected->path.size() >= sizeof(SETTINGS.minimalHomeBackgroundPath)) {
+              LOG_ERR("SETTINGS", "%s", tr(STR_BACKGROUND_IMAGE_PATH_TOO_LONG));
+            } else {
+              HalFile file;
+              if (!Storage.openFileForRead("MINIMAL", selected->path, file) || !file) {
+                LOG_ERR("SETTINGS", "Cannot open selected Minimal background BMP");
+              } else {
+                auto bitmap = makeUniqueNoThrow<Bitmap>(file);
+                if (!bitmap) {
+                  LOG_ERR("SETTINGS", "OOM: Minimal background BMP validation");
+                } else {
+                  const auto error = bitmap->parseHeaders();
+                  if (error != BmpReaderError::Ok) {
+                    LOG_ERR("SETTINGS", "%s: %s", tr(STR_BACKGROUND_IMAGE_INVALID), Bitmap::errorToString(error));
+                  } else {
+                    std::memcpy(SETTINGS.minimalHomeBackgroundPath, selected->path.c_str(), selected->path.size() + 1);
+                    SETTINGS.saveToFile();
+                  }
+                }
+              }
+            }
+          }
+          rebuildSettings();
+          requestUpdate();
+        });
+        return;
+      }
+      case SettingAction::MinimalClearBackgroundImage:
+        SETTINGS.minimalHomeBackgroundPath[0] = '\0';
+        SETTINGS.saveToFile();
+        rebuildSettings();
+        break;
       case SettingAction::None:
         // Do nothing
         break;
@@ -497,6 +557,15 @@ std::string SettingsActivity::settingValueText(const SettingInfo& setting) {
     IntervalSelectionActivity::formatDurationSeconds(valueBuffer, sizeof(valueBuffer),
                                                      SETTINGS.slideshowIntervalSeconds);
     return valueBuffer;
+  }
+  if (setting.action == SettingAction::MinimalMenuAlignment) {
+    static constexpr StrId ALIGNMENT[] = {StrId::STR_ALIGN_LEFT, StrId::STR_CENTER, StrId::STR_ALIGN_RIGHT};
+    const uint8_t value = SETTINGS.minimalMenuAlignment;
+    return value < std::size(ALIGNMENT) ? I18N.get(ALIGNMENT[value]) : I18N.get(StrId::STR_ALIGN_LEFT);
+  }
+  if (setting.action == SettingAction::MinimalBackgroundImage) {
+    return SETTINGS.minimalHomeBackgroundPath[0] == '\0' ? tr(STR_NONE_OPT)
+                                                         : std::string(SETTINGS.minimalHomeBackgroundPath);
   }
   if (setting.type == SettingType::ENUM && setting.valuePtr != nullptr) {
     // Guard like the valueGetter branch below: a corrupt/migrated settings

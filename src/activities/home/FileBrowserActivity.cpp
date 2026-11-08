@@ -105,36 +105,36 @@ void FileBrowserActivity::loadFiles() {
     return;
   }
 
-  // Size `files` once before the fill loop: doubling growth on a large folder
-  // holds the old and new string blocks live across the final realloc. The
-  // count-only pass reads no names, so filtered-out entries just over-reserve
-  // by a few slots.
+  const auto includeEntry = [this](const char* name, const bool isDirectory) {
+    if ((!SETTINGS.showHiddenFiles && name[0] == '.') || strcmp(name, "System Volume Information") == 0) return false;
+    if (isDirectory) return true;
+
+    const std::string_view filename{name};
+    if (mode == Mode::PickFirmware) return FsHelpers::checkFileExtension(filename, ".bin");
+    if (mode == Mode::PickBackgroundImage) return FsHelpers::checkFileExtension(filename, ".bmp");
+    return FsHelpers::hasReflowableBookExtension(filename) || FsHelpers::hasXtcExtension(filename) ||
+           FsHelpers::hasImageExtension(filename);
+  };
+
+  // Reserve only rows that this mode will show. For image selection this
+  // avoids sizing a string table for every book in a large SD-card root.
   size_t entryCount = 0;
-  for (auto file = root.openNextFile(); file; file = root.openNextFile()) ++entryCount;
+  for (auto file = root.openNextFile(); file; file = root.openNextFile()) {
+    file.getName(fileNameBuffer.get(), NAME_BUFFER_SIZE);
+    if (includeEntry(fileNameBuffer.get(), file.isDirectory())) ++entryCount;
+  }
   root.rewindDirectory();
   files.reserve(entryCount);
 
   for (auto file = root.openNextFile(); file; file = root.openNextFile()) {
     file.getName(fileNameBuffer.get(), NAME_BUFFER_SIZE);
     const bool isDirectory = file.isDirectory();
-    if ((!SETTINGS.showHiddenFiles && fileNameBuffer[0] == '.') ||
-        strcmp(fileNameBuffer.get(), "System Volume Information") == 0) {
-      continue;
-    }
+    if (!includeEntry(fileNameBuffer.get(), isDirectory)) continue;
 
     if (isDirectory) {
       files.emplace_back(std::string(fileNameBuffer.get()) + "/");
     } else {
-      std::string_view filename{fileNameBuffer.get()};
-      if (mode == Mode::PickFirmware) {
-        // Firmware picker: only show .bin files.
-        if (FsHelpers::checkFileExtension(filename, ".bin")) {
-          files.emplace_back(filename);
-        }
-      } else if (FsHelpers::hasReflowableBookExtension(filename) || FsHelpers::hasXtcExtension(filename) ||
-                 FsHelpers::hasImageExtension(filename)) {
-        files.emplace_back(filename);
-      }
+      files.emplace_back(fileNameBuffer.get());
     }
   }
   root.close();
@@ -345,8 +345,8 @@ void FileBrowserActivity::activateSelected() {
   const std::string& entry = files[nav.selected];
   bool isDirectory = (entry.back() == '/');
 
-  // Firmware picker: select file -> return path; navigate into directories normally.
-  if (mode == Mode::PickFirmware && !isDirectory) {
+  // File pickers return a selected path; navigate into directories normally.
+  if ((mode == Mode::PickFirmware || mode == Mode::PickBackgroundImage) && !isDirectory) {
     std::string cleanBasePath = basepath;
     if (cleanBasePath.back() != '/') cleanBasePath += "/";
     ActivityResult res{FilePathResult{cleanBasePath + entry}};
@@ -571,8 +571,8 @@ bool FileBrowserActivity::handleButtons() {
         }
 
         requestUpdate();
-      } else if (mode == Mode::PickFirmware) {
-        // Firmware picker at root: cancel back to caller instead of going home.
+      } else if (mode != Mode::Books) {
+        // Pickers at root cancel back to their caller instead of going home.
         ActivityResult res;
         res.isCancelled = true;
         setResult(std::move(res));
@@ -637,8 +637,10 @@ void FileBrowserActivity::buildScreen(UiScreen& screen) {
   }
 
   if (files.empty()) {
-    screen.centeredText(mode == Mode::PickFirmware ? tr(STR_NO_BIN_FILES) : tr(STR_NO_FILES_FOUND),
-                        screen.theme().bodyText);
+    const char* emptyText = mode == Mode::PickFirmware          ? tr(STR_NO_BIN_FILES)
+                            : mode == Mode::PickBackgroundImage ? tr(STR_NO_BITMAP_FILES)
+                                                                : tr(STR_NO_FILES_FOUND);
+    screen.centeredText(emptyText, screen.theme().bodyText);
     return;
   }
 
@@ -678,8 +680,8 @@ void FileBrowserActivity::drawChrome() {
   const auto& metrics = UITheme::getInstance().getMetrics();
 
   std::string folderName =
-      (mode == Mode::PickFirmware)
-          ? std::string(tr(STR_SELECT_FIRMWARE_FILE))
+      (mode == Mode::PickFirmware || mode == Mode::PickBackgroundImage)
+          ? std::string(mode == Mode::PickFirmware ? tr(STR_SELECT_FIRMWARE_FILE) : tr(STR_SELECT_BACKGROUND_IMAGE))
           : ((basepath == "/") ? std::string(tr(STR_SD_CARD)) : basepath.substr(basepath.rfind('/') + 1));
   // Header via GUI.drawHeader (already FreeInkUI-themed) for the battery
   // indicator; the rest of the screen renders through the app.
@@ -687,12 +689,12 @@ void FileBrowserActivity::drawChrome() {
 }
 
 void FileBrowserActivity::drawFooter() {
-  const char* backLabel = (basepath == "/") ? (mode == Mode::PickFirmware ? tr(STR_BACK) : tr(STR_HOME)) : tr(STR_BACK);
+  const char* backLabel = (basepath == "/") ? (mode != Mode::Books ? tr(STR_BACK) : tr(STR_HOME)) : tr(STR_BACK);
   // In PickFirmware mode, Confirm on a .bin returns the path to the caller (not "open"); show
   // STR_SELECT instead. Directories in the same picker still descend, so keep STR_OPEN there.
-  const bool selectingFirmwareFile = mode == Mode::PickFirmware && !files.empty() && nav.selected >= 0 &&
-                                     nav.selected < listCount() && files[nav.selected].back() != '/';
-  const char* confirmLabel = files.empty() ? "" : (selectingFirmwareFile ? tr(STR_SELECT) : tr(STR_OPEN));
+  const bool selectingPickerFile = mode != Mode::Books && !files.empty() && nav.selected >= 0 &&
+                                   nav.selected < listCount() && files[nav.selected].back() != '/';
+  const char* confirmLabel = files.empty() ? "" : (selectingPickerFile ? tr(STR_SELECT) : tr(STR_OPEN));
   const auto labels = mappedInput.mapLabels(backLabel, confirmLabel, files.empty() ? "" : tr(STR_DIR_UP),
                                             files.empty() ? "" : tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);

@@ -272,24 +272,27 @@ inline std::vector<StrId> homeThemeValues(const bool supportsCoverGrid) {
                                StrId::STR_THEME_ROUNDEDRAFF};
   if (supportsCoverGrid) values.push_back(StrId::STR_THEME_COVER_GRID);
   values.push_back(StrId::STR_THEME_DOS);
+  values.push_back(StrId::STR_THEME_MINIMAL);
   return values;
 }
 
 inline uint8_t homeThemeDisplayValue(const bool supportsCoverGrid) {
   if (!supportsCoverGrid) {
     if (SETTINGS.uiTheme == CrossPointSettings::COVER_GRID) return CrossPointSettings::LYRA;
-    if (SETTINGS.uiTheme == CrossPointSettings::DOS) return CrossPointSettings::COVER_GRID;
+    if (SETTINGS.uiTheme > CrossPointSettings::COVER_GRID && SETTINGS.uiTheme < CrossPointSettings::UI_THEME_COUNT) {
+      return SETTINGS.uiTheme - 1;
+    }
   }
-  return SETTINGS.uiTheme <= CrossPointSettings::DOS ? SETTINGS.uiTheme : CrossPointSettings::LYRA;
+  return SETTINGS.uiTheme < CrossPointSettings::UI_THEME_COUNT ? SETTINGS.uiTheme : CrossPointSettings::LYRA;
 }
 
 inline void setHomeThemeFromDisplayValue(const bool supportsCoverGrid, const uint8_t displayValue) {
   if (supportsCoverGrid) {
-    SETTINGS.uiTheme = displayValue <= CrossPointSettings::DOS ? displayValue : CrossPointSettings::LYRA;
+    SETTINGS.uiTheme = displayValue < CrossPointSettings::UI_THEME_COUNT ? displayValue : CrossPointSettings::LYRA;
   } else {
-    SETTINGS.uiTheme = displayValue < CrossPointSettings::COVER_GRID    ? displayValue
-                       : displayValue == CrossPointSettings::COVER_GRID ? CrossPointSettings::DOS
-                                                                        : CrossPointSettings::LYRA;
+    SETTINGS.uiTheme = displayValue < CrossPointSettings::COVER_GRID           ? displayValue
+                       : displayValue < CrossPointSettings::UI_THEME_COUNT - 1 ? displayValue + 1
+                                                                               : CrossPointSettings::LYRA;
   }
   UITheme::getInstance().reload();
 }

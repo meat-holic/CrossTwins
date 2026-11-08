@@ -33,6 +33,9 @@ enum class SettingAction {
   HomeButton,
   About,
   SlideshowInterval,
+  MinimalMenuAlignment,
+  MinimalBackgroundImage,
+  MinimalClearBackgroundImage,
 };
 
 struct SettingInfo {

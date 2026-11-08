@@ -25,6 +25,7 @@
 #include "RecentBooksStore.h"
 #include "components/UITheme.h"
 #include "components/themes/dos/DosTheme.h"
+#include "components/themes/minimal/MinimalTheme.h"
 #include "fontIds.h"
 
 int HomeActivity::getMenuItemCount() const {
@@ -286,7 +287,27 @@ void HomeActivity::configureForTheme(const bool preserveSelection) {
   } else {
     selectorIndex = base;
   }
-  configuredTheme = SETTINGS.uiTheme;
+  {
+    // Publish the selection/layout state after any render of the previous theme
+    // has left the framebuffer. The next Minimal frame must be complete before
+    // selection-only redraws can use it as their baseline.
+    RenderLock lock;
+    configuredTheme = SETTINGS.uiTheme;
+    minimalSelectionRedraw.requireFullFrame();
+  }
+}
+
+void HomeActivity::setSelectorIndex(const int index) {
+  if (UITheme::getInstance().isThemeActive(CrossPointSettings::MINIMAL)) {
+    RenderLock lock;
+    if (selectorIndex == index) return;
+    selectorIndex = index;
+    minimalSelectionRedraw.selectionChanged();
+  } else {
+    if (selectorIndex == index) return;
+    selectorIndex = index;
+  }
+  requestUpdate();
 }
 
 void HomeActivity::onEnter() {
@@ -306,6 +327,16 @@ void HomeActivity::onExit() {
 
   // Free the stored cover buffer if any
   freeCoverBuffer();
+}
+
+void HomeActivity::onResume() {
+  Activity::onResume();
+  if (UITheme::getInstance().isThemeActive(CrossPointSettings::MINIMAL)) {
+    RenderLock lock;
+    minimalSelectionRedraw.requireFullFrame();
+    lock.unlock();
+    requestUpdate();
+  }
 }
 
 bool HomeActivity::storeCoverBuffer() {
@@ -385,26 +416,20 @@ void HomeActivity::loop() {
   // Cover grid home splits navigation by button group (see below); the flat
   // next/previous cycle is for the classic list home only.
   if (!coverGridUi) {
-    buttonNavigator.onNext([this, menuCount] {
-      selectorIndex = ButtonNavigator::nextIndex(selectorIndex, menuCount);
-      requestUpdate();
-    });
+    buttonNavigator.onNext(
+        [this, menuCount] { setSelectorIndex(ButtonNavigator::nextIndex(selectorIndex, menuCount)); });
 
-    buttonNavigator.onPrevious([this, menuCount] {
-      selectorIndex = ButtonNavigator::previousIndex(selectorIndex, menuCount);
-      requestUpdate();
-    });
+    buttonNavigator.onPrevious(
+        [this, menuCount] { setSelectorIndex(ButtonNavigator::previousIndex(selectorIndex, menuCount)); });
   }
 
   const auto swipe = mappedInput.wasSwipe();
   if (swipe == MappedInputManager::SwipeDir::Up) {
-    selectorIndex = ButtonNavigator::nextIndex(selectorIndex, menuCount);
-    requestUpdate();
+    setSelectorIndex(ButtonNavigator::nextIndex(selectorIndex, menuCount));
     return;
   }
   if (swipe == MappedInputManager::SwipeDir::Down) {
-    selectorIndex = ButtonNavigator::previousIndex(selectorIndex, menuCount);
-    requestUpdate();
+    setSelectorIndex(ButtonNavigator::previousIndex(selectorIndex, menuCount));
     return;
   }
 
@@ -439,8 +464,7 @@ void HomeActivity::loop() {
       } else {
         idx = (idx + count + dir) % count;
       }
-      selectorIndex = base + idx;
-      requestUpdate();
+      setSelectorIndex(base + idx);
     };
     buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Up},
                                          [&cycleBand, bookCount] { cycleBand(0, bookCount, -1); });
@@ -461,38 +485,46 @@ void HomeActivity::loop() {
   // for viewable insets here; DOS rows use their screen-relative text geometry.
   const Rect content = UITheme::getInstance().getContentArea(renderer);
   const bool dosTheme = UITheme::getInstance().isThemeActive(CrossPointSettings::DOS);
+  const bool minimalTheme = UITheme::getInstance().isThemeActive(CrossPointSettings::MINIMAL);
   const DosHomeLayout dosLayout =
       dosTheme ? DosTheme::homeLayout(renderer, static_cast<int>(recentBooks.size())) : DosHomeLayout{};
+  const int renderedMenuCount =
+      menuCount - (metrics.homeContinueReadingInMenu ? 0 : static_cast<int>(recentBooks.size()));
+  const MinimalHomeLayout minimalLayout = minimalTheme
+                                              ? MinimalTheme::homeLayout(renderer, renderedMenuCount)
+                                              : MinimalHomeLayout{Rect(0, 0, 0, 0), Rect(0, 0, 0, 0), Rect(0, 0, 0, 0)};
   const int coverColumnCount = std::max(1, metrics.homeRecentBooksCount);
-  const int recentCount = dosTheme ? std::min(static_cast<int>(recentBooks.size()), dosLayout.recentBookCount)
-                                   : std::min(static_cast<int>(recentBooks.size()), coverColumnCount);
+  const int recentCount = dosTheme       ? std::min(static_cast<int>(recentBooks.size()), dosLayout.recentBookCount)
+                          : minimalTheme ? std::min(static_cast<int>(recentBooks.size()), coverColumnCount)
+                                         : std::min(static_cast<int>(recentBooks.size()), coverColumnCount);
   const int coverColumnWidth = (content.width - 2 * metrics.contentSidePadding) / coverColumnCount;
   int touchedBook = -1;
   const auto coverTouch =
-      dosTheme ? mappedInput.rowTouch(touchedBook, dosLayout.recentRowsTop, dosLayout.recentRowStep, recentCount,
-                                      dosLayout.contentX, renderer.getScreenWidth() - dosLayout.contentX,
-                                      dosLayout.recentRowStep)
-               : mappedInput.colTouch(touchedBook, content.x + metrics.contentSidePadding, coverColumnWidth,
-                                      recentCount, metrics.homeTopPadding,
-                                      metrics.homeTopPadding + metrics.homeCoverTileHeight, coverColumnWidth);
+      dosTheme       ? mappedInput.rowTouch(touchedBook, dosLayout.recentRowsTop, dosLayout.recentRowStep, recentCount,
+                                            dosLayout.contentX, renderer.getScreenWidth() - dosLayout.contentX,
+                                            dosLayout.recentRowStep)
+      : minimalTheme ? mappedInput.rowTouch(
+                           touchedBook, minimalLayout.recent.y, std::max(1, minimalLayout.recent.height), recentCount,
+                           minimalLayout.recent.x, minimalLayout.recent.width, std::max(1, minimalLayout.recent.height))
+                     : mappedInput.colTouch(touchedBook, content.x + metrics.contentSidePadding, coverColumnWidth,
+                                            recentCount, metrics.homeTopPadding,
+                                            metrics.homeTopPadding + metrics.homeCoverTileHeight, coverColumnWidth);
   if (coverTouch != MappedInputManager::RowTouch::None) {
     if (coverTouch == MappedInputManager::RowTouch::Down) {
       if (selectorIndex != touchedBook) {
-        selectorIndex = touchedBook;
-        requestUpdate();
+        setSelectorIndex(touchedBook);
       }
     } else {
-      selectorIndex = touchedBook;
+      setSelectorIndex(touchedBook);
       haptic_feedback::touchAction();
       activateSelection();
     }
     return;
   }
 
-  const int menuTop = dosTheme ? dosLayout.menuRowsTop
-                               : metrics.homeTopPadding + metrics.homeCoverTileHeight + metrics.homeMenuTopOffset;
-  const int renderedMenuCount =
-      menuCount - (metrics.homeContinueReadingInMenu ? 0 : static_cast<int>(recentBooks.size()));
+  const int menuTop = dosTheme       ? dosLayout.menuRowsTop
+                      : minimalTheme ? minimalLayout.menu.y
+                                     : metrics.homeTopPadding + metrics.homeCoverTileHeight + metrics.homeMenuTopOffset;
   int menuRow = -1;
   // Row height from the theme, not the metrics table: RoundedRaff draws
   // font-derived rows and the touch grid must match the visuals exactly.
@@ -502,18 +534,27 @@ void HomeActivity::loop() {
   const int menuRowStep =
       dosTheme ? DosTheme::homeMenuRowStep(renderer, renderedMenuCount, static_cast<int>(recentBooks.size()))
                : menuRowHeight + metrics.menuSpacing;
+  int menuRowBase = 0;
+  int touchMenuRowCount = renderedMenuCount;
+  if (minimalTheme) {
+    const int pageItems = std::max(1, minimalLayout.menu.height / std::max(1, menuRowStep));
+    const int selectedMenuIndex =
+        metrics.homeContinueReadingInMenu ? selectorIndex : selectorIndex - static_cast<int>(recentBooks.size());
+    menuRowBase = (std::max(0, selectedMenuIndex) / pageItems) * pageItems;
+    touchMenuRowCount = std::max(0, std::min(pageItems, renderedMenuCount - menuRowBase));
+  }
   const auto menuTouch =
-      mappedInput.rowTouch(menuRow, menuTop, menuRowStep, renderedMenuCount, 0, INT32_MAX, menuRowHeight);
+      mappedInput.rowTouch(menuRow, menuTop, menuRowStep, touchMenuRowCount, 0, INT32_MAX, menuRowHeight);
   if (menuTouch != MappedInputManager::RowTouch::None) {
+    menuRow += menuRowBase;
     const int touchedIndex =
         metrics.homeContinueReadingInMenu ? menuRow : menuRow + static_cast<int>(recentBooks.size());
     if (menuTouch == MappedInputManager::RowTouch::Down) {
       if (selectorIndex != touchedIndex) {
-        selectorIndex = touchedIndex;
-        requestUpdate();
+        setSelectorIndex(touchedIndex);
       }
     } else {
-      selectorIndex = touchedIndex;
+      setSelectorIndex(touchedIndex);
       haptic_feedback::touchAction();
       activateSelection();
     }
@@ -532,17 +573,23 @@ void HomeActivity::render(RenderLock&&) {
   if (configuredTheme != SETTINGS.uiTheme) return;
 
   const bool dosTheme = UITheme::getInstance().isThemeActive(CrossPointSettings::DOS);
+  const bool minimalTheme = UITheme::getInstance().isThemeActive(CrossPointSettings::MINIMAL);
   const auto& metrics = UITheme::getInstance().getMetrics();
   const auto pageWidth = renderer.getScreenWidth();
   const auto pageHeight = renderer.getScreenHeight();
   const DosHomeLayout dosLayout =
       dosTheme ? DosTheme::homeLayout(renderer, static_cast<int>(recentBooks.size())) : DosHomeLayout{};
+  const int renderedMenuCount =
+      getMenuItemCount() - (metrics.homeContinueReadingInMenu ? 0 : static_cast<int>(recentBooks.size()));
+  const MinimalHomeLayout minimalLayout = minimalTheme
+                                              ? MinimalTheme::homeLayout(renderer, renderedMenuCount)
+                                              : MinimalHomeLayout{Rect(0, 0, 0, 0), Rect(0, 0, 0, 0), Rect(0, 0, 0, 0)};
   // Content columns clear the bezel insets on rounded panels. The header
   // self-insets in drawHeader, so only the cover/menu need it here.
   const Rect content = UITheme::getInstance().getContentArea(renderer);
 
-  renderer.clearScreen();
   if (coverGridUi) {
+    renderer.clearScreen();
     coverGridUi->setSelection(selectorIndex);
     UITheme::getInstance().drawCoverGridHome(*coverGridUi);
     // Front Left/Right walk the tabs, so their hints read Left/Right; the
@@ -571,8 +618,47 @@ void HomeActivity::render(RenderLock&&) {
     }
     return;
   }
-  // A retained Lyra cover snapshot must not be pasted over DOS text rows.
-  bool bufferRestored = !dosTheme && coverRendered && coverBufferStored && restoreCoverBuffer();
+  std::vector<const char*> menuItems = {tr(STR_BROWSE_FILES), tr(STR_LIBRARY), tr(STR_FILE_TRANSFER),
+                                        tr(STR_SETTINGS_TITLE)};
+  std::vector<UIIcon> menuIcons = {Folder, Library, Transfer, Settings};
+  if (hasLibrarySlot()) {
+    menuItems.insert(menuItems.begin() + 2, hasPlugins ? tr(STR_PLUGINS) : tr(STR_OPDS_BROWSER));
+    menuIcons.insert(menuIcons.begin() + 2, Plugins);
+  }
+  if (metrics.homeContinueReadingInMenu && !recentBooks.empty()) {
+    menuItems.insert(menuItems.begin(), tr(STR_CONTINUE_READING));
+    menuIcons.insert(menuIcons.begin(), Book);
+  }
+
+  if (minimalTheme && minimalSelectionRedraw.canRedrawSelection()) {
+    const auto& theme = static_cast<const MinimalTheme&>(GUI);
+    const int previousSelectorIndex = minimalSelectionRedraw.previousSelection();
+    const int previousMenuIndex = metrics.homeContinueReadingInMenu
+                                      ? previousSelectorIndex
+                                      : previousSelectorIndex - static_cast<int>(recentBooks.size());
+    const int selectedMenuIndex =
+        metrics.homeContinueReadingInMenu ? selectorIndex : selectorIndex - static_cast<int>(recentBooks.size());
+    if (theme.redrawMenuSelection(renderer, minimalLayout.menu, static_cast<int>(menuItems.size()), previousMenuIndex,
+                                  selectedMenuIndex,
+                                  [&menuItems](int index) { return std::string(menuItems[index]); })) {
+      if (previousSelectorIndex == 0) {
+        GUI.drawHomeRecentBooks(renderer, minimalLayout.recent, recentBooks, -1, recentBookProgress.data(),
+                                recentBooks.size());
+      }
+      if (selectorIndex == 0) {
+        GUI.drawHomeRecentBooks(renderer, minimalLayout.recent, recentBooks, 0, recentBookProgress.data(),
+                                recentBooks.size());
+      }
+      minimalSelectionRedraw.selectionRendered(selectorIndex);
+      renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+      return;
+    }
+  }
+
+  renderer.clearScreen();
+
+  // A retained Lyra cover snapshot must not be pasted over DOS or Minimal home content.
+  bool bufferRestored = !dosTheme && !minimalTheme && coverRendered && coverBufferStored && restoreCoverBuffer();
 
   // Band spans topPadding..homeTopPadding: the cover tile starts at the fixed
   // homeTopPadding, so the height must shrink by topPadding or the band (and a
@@ -580,16 +666,23 @@ void HomeActivity::render(RenderLock&&) {
   // Home is the stack root: no back button in its header.
   const Rect headerRect =
       dosTheme ? dosLayout.header : Rect{0, metrics.topPadding, pageWidth, metrics.homeTopPadding - metrics.topPadding};
-  GUI.drawHeader(renderer, headerRect,
-                 metrics.homeContinueReadingInMenu && !recentBooks.empty() ? recentBooks[0].title.c_str() : nullptr,
-                 nullptr, false);
+  const char* headerTitle = minimalTheme                                                ? nullptr
+                            : metrics.homeContinueReadingInMenu && !recentBooks.empty() ? recentBooks[0].title.c_str()
+                                                                                        : nullptr;
+  GUI.drawHeader(renderer, headerRect, headerTitle, nullptr, false);
 
   // Record the tile rect so storeCoverBuffer (called from the theme) knows
   // which sub-region of the framebuffer to snapshot. ~16 KB in Portrait
   // instead of the 48 KB full framebuffer the previous bind captured.
   const Rect recentBooksRect =
-      dosTheme ? dosLayout.recent : Rect{content.x, metrics.homeTopPadding, content.width, metrics.homeCoverTileHeight};
-  if (dosTheme) {
+      dosTheme       ? dosLayout.recent
+      : minimalTheme ? minimalLayout.recent
+                     : Rect{content.x, metrics.homeTopPadding, content.width, metrics.homeCoverTileHeight};
+  if (minimalTheme) {
+    MinimalTheme::drawBackground(renderer, minimalLayout.background, SETTINGS.minimalHomeBackgroundPath);
+    GUI.drawHomeRecentBooks(renderer, recentBooksRect, recentBooks, selectorIndex, recentBookProgress.data(),
+                            recentBooks.size());
+  } else if (dosTheme) {
     GUI.drawHomeRecentBooks(renderer, recentBooksRect, recentBooks, selectorIndex, recentBookProgress.data(),
                             recentBooks.size());
   } else {
@@ -602,28 +695,13 @@ void HomeActivity::render(RenderLock&&) {
                             homeUsesSingleLyra ? &bookProgressSnapshot : nullptr);
   }
 
-  // Build menu items dynamically
-  std::vector<const char*> menuItems = {tr(STR_BROWSE_FILES), tr(STR_LIBRARY), tr(STR_FILE_TRANSFER),
-                                        tr(STR_SETTINGS_TITLE)};
-  std::vector<UIIcon> menuIcons = {Folder, Library, Transfer, Settings};
-
-  if (hasLibrarySlot()) {
-    menuItems.insert(menuItems.begin() + 2, hasPlugins ? tr(STR_PLUGINS) : tr(STR_OPDS_BROWSER));
-    menuIcons.insert(menuIcons.begin() + 2, Plugins);
-  }
-
-  if (metrics.homeContinueReadingInMenu && !recentBooks.empty()) {
-    // Insert Continue Reading at the top if enabled in theme
-    menuItems.insert(menuItems.begin(), tr(STR_CONTINUE_READING));
-    menuIcons.insert(menuIcons.begin(), Book);
-  }
-
   const Rect menuRect =
-      dosTheme ? dosLayout.menu
-               : Rect{content.x, metrics.homeTopPadding + metrics.homeCoverTileHeight + metrics.homeMenuTopOffset,
-                      content.width,
-                      pageHeight - (metrics.headerHeight + metrics.homeTopPadding + metrics.verticalSpacing +
-                                    metrics.homeMenuTopOffset + metrics.buttonHintsHeight)};
+      dosTheme       ? dosLayout.menu
+      : minimalTheme ? minimalLayout.menu
+                     : Rect{content.x, metrics.homeTopPadding + metrics.homeCoverTileHeight + metrics.homeMenuTopOffset,
+                            content.width,
+                            pageHeight - (metrics.headerHeight + metrics.homeTopPadding + metrics.verticalSpacing +
+                                          metrics.homeMenuTopOffset + metrics.buttonHintsHeight)};
   GUI.drawButtonMenu(
       renderer, menuRect, static_cast<int>(menuItems.size()),
       metrics.homeContinueReadingInMenu ? selectorIndex : selectorIndex - recentBooks.size(),
@@ -636,9 +714,19 @@ void HomeActivity::render(RenderLock&&) {
 
   renderer.displayBuffer(cleanInitialRefresh && !firstRenderDone ? HalDisplay::HALF_REFRESH : HalDisplay::FAST_REFRESH);
 
+  if (minimalTheme) {
+    minimalSelectionRedraw.fullFrameRendered(selectorIndex);
+  }
+
   if (!firstRenderDone) {
     firstRenderDone = true;
-    requestUpdate();
+    if (minimalTheme) {
+      // Minimal has no cover-generation pass, so a second identical BMP decode
+      // is unnecessary.
+      recentsLoaded = true;
+    } else {
+      requestUpdate();
+    }
   } else if (!recentsLoaded && !recentsLoading) {
     if (!GUI.usesHomeCoverImages()) {
       recentsLoaded = true;

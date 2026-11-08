@@ -9,8 +9,8 @@
 
 class FileBrowserActivity final : public UiListActivity {
  public:
-  // Books = standard reader browser; PickFirmware = filter to .bin only and return path via ActivityResult.
-  enum class Mode { Books, PickFirmware };
+  // Pickers return a selected path through ActivityResult and filter files by type.
+  enum class Mode { Books, PickFirmware, PickBackgroundImage };
 
  private:
   // File actions

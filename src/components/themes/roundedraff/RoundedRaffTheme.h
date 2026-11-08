@@ -1,6 +1,7 @@
 #pragma once
 
 #include "components/themes/BaseTheme.h"
+#include "components/themes/HomeMenuGeometry.h"
 
 class GfxRenderer;
 
@@ -90,6 +91,14 @@ constexpr ThemeMetrics values = {.batteryWidth = 15,
 }
 
 class RoundedRaffTheme : public BaseTheme {
+ protected:
+  void drawButtonMenuWithStyle(GfxRenderer& renderer, Rect rect, int buttonCount, int selectedIndex,
+                               const std::function<std::string(int index)>& buttonLabel, home_menu::Alignment alignment,
+                               home_menu::Appearance appearance) const;
+  void drawButtonMenuRowWithStyle(GfxRenderer& renderer, Rect rect, int index, int pageStartIndex, bool selected,
+                                  const char* label, home_menu::Alignment alignment,
+                                  home_menu::Appearance appearance) const;
+
  public:
   void drawHeader(const GfxRenderer& renderer, Rect rect, const char* title, const char* subtitle = nullptr,
                   bool backButton = true) const override;

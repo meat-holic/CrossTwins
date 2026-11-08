@@ -111,6 +111,8 @@ Upon turning the device on for the first time, you will be placed on the **[Home
 
 The Home screen is the main entry point to the firmware. From here you can navigate to **[Reading Mode](#4-reading-mode)** with the most recently read book, **[Browse Files](#33-browse-files-screen)**, the **[Library](#34-library-screen)**, **[File Transfer](#35-file-transfer-screen)**, or **[Settings](#36-settings)**.
 
+The **Minimal** home theme shows recent-book details above a text menu. With Minimal selected, open **Settings → Display** to choose left, center, or right menu alignment and optionally select a BMP file from the SD card as a background. The image is fit inside the middle content area, between the status area and the button hints; recent-book details and menu text appear over it.
+
 ### 3.2 Reading Mode
 
 See [Reading Mode](#4-reading-mode) below for more information.
@@ -257,6 +259,8 @@ Settings are grouped into **System**, **Display**, **Reader**, **Controls**, **L
   - "Lyra" - The new theme for Crosspoint featuring rounded elements and menu icons
   - "Lyra Extended" - Lyra, but displays 3 books instead of 1 on the **[Home Screen](#31-home-screen)**
   - "RoundedRaff" - A rounded theme with additional visual styling
+  - "Gallaemok (DOS)" - A text-based home theme with a DOS-style system information panel
+  - "Minimal" - A text-based home theme with recent-book details, configurable menu alignment, and an optional BMP background from the SD card
 
 - **Sunlight Fading Fix**: Configure whether to enable a software-fix for the issue where white X4 models may fade when used in direct sunlight:
   

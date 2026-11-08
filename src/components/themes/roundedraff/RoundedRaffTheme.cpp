@@ -145,40 +145,58 @@ int RoundedRaffTheme::getMenuRowHeight(const GfxRenderer& renderer) const {
 void RoundedRaffTheme::drawButtonMenu(GfxRenderer& renderer, Rect rect, int buttonCount, int selectedIndex,
                                       const std::function<std::string(int index)>& buttonLabel,
                                       const std::function<UIIcon(int index)>& rowIcon) const {
+  drawButtonMenuWithStyle(renderer, rect, buttonCount, selectedIndex, buttonLabel, home_menu::Alignment::LEFT,
+                          home_menu::Appearance::ROUNDED_CARDS);
   (void)rowIcon;
-  const int sidePadding = RoundedRaffMetrics::values.contentSidePadding;
-  const int rowX = rect.x + sidePadding;
-  const int rowHeight = getMenuRowHeight(renderer);  // shared with HomeActivity's touch grid
+}
+
+void RoundedRaffTheme::drawButtonMenuWithStyle(GfxRenderer& renderer, Rect rect, int buttonCount, int selectedIndex,
+                                               const std::function<std::string(int index)>& buttonLabel,
+                                               const home_menu::Alignment alignment,
+                                               const home_menu::Appearance appearance) const {
+  const int rowHeight = getMenuRowHeight(renderer);
   const int rowGap = kSelectableRowGap;
   const int rowStep = rowHeight + rowGap;
   const int pageItems = std::max(1, rect.height / rowStep);
   const int safeSelectedIndex = std::max(0, selectedIndex);
   const int pageStartIndex = (safeSelectedIndex / pageItems) * pageItems;
-  const int menuTop = rect.y;
-  const int textLineHeight = renderer.getLineHeight(kTitleFontId);
-  const int menuMaxWidth = std::max(0, rect.width - sidePadding * 2);
 
   for (int i = pageStartIndex; i < buttonCount && i < pageStartIndex + pageItems; ++i) {
     const std::string label = buttonLabel(i);
-    const int rowY = menuTop + (i - pageStartIndex) * rowStep;
-    constexpr int kRowPaddingX = 40;  // 20px L/R
-    const int maxLabelWidth = std::max(0, menuMaxWidth - kRowPaddingX);
-    const std::string truncatedLabel =
-        renderer.truncatedText(kTitleFontId, label.c_str(), maxLabelWidth, EpdFontFamily::BOLD);
-    const int rowWidth = std::min(
-        menuMaxWidth, renderer.getTextWidth(kTitleFontId, truncatedLabel.c_str(), EpdFontFamily::BOLD) + kRowPaddingX);
-    const bool isSelected = selectedIndex == i;
-    renderer.fillRoundedRect(rowX, rowY, rowWidth, rowHeight, kMenuRadius, isSelected ? Color::Black : Color::White);
-    const int textY = rowY + (rowHeight - textLineHeight) / 2;
-    const int textX = rowX + kInteractiveInsetX;
-    if (selectedIndex == i) {
-      renderer.drawText(kTitleFontId, textX, textY, truncatedLabel.c_str(), false, EpdFontFamily::BOLD);
-    } else {
-      renderer.drawText(kTitleFontId, textX, textY, truncatedLabel.c_str(), true, EpdFontFamily::BOLD);
-    }
+    drawButtonMenuRowWithStyle(renderer, rect, i, pageStartIndex, selectedIndex == i, label.c_str(), alignment,
+                               appearance);
   }
 
   drawScrollBar(renderer, rect, buttonCount, pageStartIndex, pageItems);
+}
+
+void RoundedRaffTheme::drawButtonMenuRowWithStyle(GfxRenderer& renderer, const Rect rect, const int index,
+                                                  const int pageStartIndex, const bool selected, const char* label,
+                                                  const home_menu::Alignment alignment,
+                                                  const home_menu::Appearance appearance) const {
+  const int sidePadding = RoundedRaffMetrics::values.contentSidePadding;
+  const int rowHeight = getMenuRowHeight(renderer);
+  const int rowY = rect.y + (index - pageStartIndex) * (rowHeight + kSelectableRowGap);
+  constexpr int kCardPaddingX = 40;      // 20px L/R, matching the original RoundedRaff rows
+  constexpr int kTextChipPaddingX = 24;  // 12px L/R around text on an image background
+  const int rowPaddingX = appearance == home_menu::Appearance::ROUNDED_CARDS ? kCardPaddingX : kTextChipPaddingX;
+  const int maxLabelWidth = std::max(0, rect.width - sidePadding * 2 - rowPaddingX);
+  const std::string truncatedLabel = renderer.truncatedText(kTitleFontId, label, maxLabelWidth, EpdFontFamily::BOLD);
+  const int rowWidth =
+      std::min(std::max(0, rect.width - sidePadding * 2),
+               renderer.getTextWidth(kTitleFontId, truncatedLabel.c_str(), EpdFontFamily::BOLD) + rowPaddingX);
+  const int rowX = home_menu::alignedRowX(rect.x, rect.width, sidePadding, rowWidth, alignment);
+
+  if (appearance == home_menu::Appearance::ROUNDED_CARDS) {
+    renderer.fillRoundedRect(rowX, rowY, rowWidth, rowHeight, kMenuRadius, selected ? Color::Black : Color::White);
+  } else {
+    renderer.fillRect(rowX, rowY, rowWidth, rowHeight, selected);
+  }
+
+  const int textLineHeight = renderer.getLineHeight(kTitleFontId);
+  const int textInset = appearance == home_menu::Appearance::ROUNDED_CARDS ? kInteractiveInsetX : 12;
+  const int textY = rowY + (rowHeight - textLineHeight) / 2;
+  renderer.drawText(kTitleFontId, rowX + textInset, textY, truncatedLabel.c_str(), !selected, EpdFontFamily::BOLD);
 }
 
 void RoundedRaffTheme::drawTextField(const GfxRenderer& renderer, Rect rect, const int textWidth, bool cursorMode,

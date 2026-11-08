@@ -13,7 +13,7 @@ CrossTwins 2.0.0 is based on CrossPoint Reader 2.0.0 and keeps the Korean-first 
 - Recent-book progress in the Lyra home screen and an image slideshow for BMP and PNG files.
 - BLE page turners with configurable key mappings, plus the existing Wi-Fi, Web UI, and OTA workflows.
 
-The Gallaemok DOS home theme was ported after RC3 and is retained alongside Lyra and the other registered themes.
+The Gallaemok DOS home theme was ported after RC3 and is retained alongside Lyra, RoundedRaff, and Minimal.
 Its home screen includes a sysinfo panel for free and largest contiguous default heap, CPU clock frequency in MHz (not
 utilization), uptime, and the internal SoC temperature when supported; unsupported or failed temperature readings are
 marked unavailable.
@@ -65,7 +65,7 @@ Check [our Devices page](https://crosspointreader.com/devices) for the full list
   - OPDS browser with saved servers (up to 8), search, pagination, and direct download
   - OTA update checks and installs from GitHub releases
 
-- **Customization**: night mode, multiple themes (Classic, Lyra, Lyra Extended, RoundedRaff), sleep screen modes including transparent overlays, front/side button remapping, status bar controls including the Memory Monitor's free heap/largest-block diagnostics, power-button behavior, refresh cadence, and more.
+- **Customization**: night mode, multiple themes (Classic, Lyra, Lyra Extended, RoundedRaff, Gallaemok DOS, Minimal), sleep screen modes including transparent overlays, front/side button remapping, status bar controls including the Memory Monitor's free heap/largest-block diagnostics, power-button behavior, refresh cadence, and more. Minimal places recent-book details above a text menu, supports left/center/right menu alignment, and can display an optional SD-card BMP behind the center content.
 
 - **Localization**: 34 UI languages and counting, including CJK font fallback and RTL support.
 
