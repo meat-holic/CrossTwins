@@ -33,6 +33,8 @@ class MinimalTheme final : public RoundedRaffTheme {
   bool usesHomeCoverImages() const override { return false; }
   void drawHomeButtonMenu(GfxRenderer& renderer, Rect rect, int buttonCount, int selectedIndex,
                           const std::function<std::string(int index)>& buttonLabel) const;
+  void drawHomeButtonHints(GfxRenderer& renderer, const char* btn1, const char* btn2, const char* btn3,
+                           const char* btn4) const;
 
   static MinimalHomeLayout homeLayout(const GfxRenderer& renderer, int menuItemCount);
   static bool drawBackground(GfxRenderer& renderer, Rect contentArea, const char* imagePath);

@@ -128,7 +128,7 @@ Use an uncompressed BMP matching the visible home content area's aspect ratio fo
 | X3 | Landscape clockwise | (43, 62, 740, 463) | 740 × 463 |
 | X3 | Landscape counter-clockwise | (9, 62, 740, 463) | 740 × 463 |
 
-These logical-pixel coordinates use the current X3/X4 bezel insets and the 40-pixel physical-button hint band. The status area ends at Y=62. The image rectangle ends at Y=757 on X4 and Y=749 on X3 in portrait. In landscape, the button-hint area is a side band: the image starts at X=43 clockwise and X=9 counter-clockwise. RoundedRaff's shared button-hint renderer draws outlined hint groups, not a separate separator line; the hint groups remain outside the image area. The renderer clips the BMP to the listed background rectangle.
+These logical-pixel coordinates use the current X3/X4 bezel insets and the 40-pixel physical-button hint band. The status area ends at Y=62. Minimal's home-only text hints use a divider at Y=757 on X4 and Y=749 on X3 in portrait, Y=42 when inverted, and X=42 clockwise or X=757 (X4) / X=749 (X3) counter-clockwise in landscape. In landscape, the button-hint area is a side band: the image starts at X=43 clockwise and X=9 counter-clockwise. Home hints remain text-only; sub-screens use RoundedRaff's shared outlined hint groups. The renderer clips the BMP to the listed background rectangle.
 
 ### 3.2 Reading Mode
 

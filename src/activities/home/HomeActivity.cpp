@@ -713,7 +713,12 @@ void HomeActivity::render(RenderLock&&) {
 
   const auto labels = mappedInput.mapLabels(recentBooks.empty() ? "" : tr(STR_RESUME), tr(STR_SELECT), tr(STR_DIR_UP),
                                             tr(STR_DIR_DOWN));
-  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+  if (minimalTheme) {
+    static_cast<const MinimalTheme&>(GUI).drawHomeButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3,
+                                                              labels.btn4);
+  } else {
+    GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+  }
 
   renderer.displayBuffer(cleanInitialRefresh && !firstRenderDone ? HalDisplay::HALF_REFRESH : HalDisplay::FAST_REFRESH);
 

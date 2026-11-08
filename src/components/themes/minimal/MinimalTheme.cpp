@@ -21,6 +21,7 @@ constexpr int kRecentSidePadding = 20;
 constexpr int kRecentBlockPaddingX = 12;
 constexpr int kRecentBlockPaddingY = 8;
 constexpr int kMenuSectionGap = 18;
+constexpr int kHomeHintFont = UI_10_FONT_ID;
 constexpr int kRecentTitleFont = UI_12_FONT_ID;
 constexpr int kRecentAuthorFont = UI_10_FONT_ID;
 
@@ -152,6 +153,74 @@ void MinimalTheme::drawHomeButtonMenu(GfxRenderer& renderer, const Rect rect, co
                                       const std::function<std::string(int index)>& buttonLabel) const {
   drawButtonMenuWithStyle(renderer, rect, buttonCount, selectedIndex, buttonLabel, menuAlignment(),
                           home_menu::Appearance::TEXT_CHIPS);
+}
+
+void MinimalTheme::drawHomeButtonHints(GfxRenderer& renderer, const char* btn1, const char* btn2, const char* btn3,
+                                       const char* btn4) const {
+  if (gpio.hasTouch()) return;
+
+  const Rect content = UITheme::getContentArea(renderer);
+  const Rect safe = UITheme::getInstance().getScreenSafeArea(renderer, true, false);
+  const int height = UITheme::getInstance().getMetrics().buttonHintsHeight;
+  if (height <= 0 || content.width <= 0 || content.height <= 0) return;
+
+  Rect footer{};
+  int separatorX1 = 0;
+  int separatorY1 = 0;
+  int separatorX2 = 0;
+  int separatorY2 = 0;
+  const auto orientation = renderer.getOrientation();
+  if (orientation == GfxRenderer::Orientation::Portrait) {
+    footer =
+        Rect(safe.x, safe.y + safe.height, safe.width, std::max(0, content.y + content.height - safe.y - safe.height));
+    separatorX1 = footer.x;
+    separatorY1 = footer.y;
+    separatorX2 = footer.x + footer.width - 1;
+    separatorY2 = footer.y;
+  } else if (orientation == GfxRenderer::Orientation::PortraitInverted) {
+    footer = Rect(safe.x, content.y, safe.width, std::max(0, safe.y - content.y));
+    separatorX1 = footer.x;
+    separatorY1 = footer.y + footer.height - 1;
+    separatorX2 = footer.x + footer.width - 1;
+    separatorY2 = separatorY1;
+  } else if (orientation == GfxRenderer::Orientation::LandscapeClockwise) {
+    footer = Rect(content.x, safe.y, std::max(0, safe.x - content.x), safe.height);
+    separatorX1 = footer.x + footer.width - 1;
+    separatorY1 = footer.y;
+    separatorX2 = separatorX1;
+    separatorY2 = footer.y + footer.height - 1;
+  } else {
+    footer =
+        Rect(safe.x + safe.width, safe.y, std::max(0, content.x + content.width - safe.x - safe.width), safe.height);
+    separatorX1 = footer.x;
+    separatorY1 = footer.y;
+    separatorX2 = separatorX1;
+    separatorY2 = footer.y + footer.height - 1;
+  }
+  if (footer.width <= 0 || footer.height <= 0) return;
+  renderer.drawLine(separatorX1, separatorY1, separatorX2, separatorY2, 1, true);
+
+  const char* labels[] = {btn1, btn2, btn3, btn4};
+  const bool vertical = footer.height > footer.width;
+  const int cellExtent = vertical ? footer.height : footer.width;
+  const int cellSize = cellExtent / 4;
+  for (int i = 0; i < 4; ++i) {
+    if (labels[i] == nullptr || labels[i][0] == '\0') continue;
+    const int start = i * cellSize;
+    const int extent = i == 3 ? cellExtent - start : cellSize;
+    if (vertical) {
+      const int lineHeight = renderer.getLineHeight(kHomeHintFont);
+      const std::string label = renderer.truncatedText(kHomeHintFont, labels[i], std::max(0, footer.width - 4));
+      const int textWidth = renderer.getTextWidth(kHomeHintFont, label.c_str());
+      const int x = footer.x + (footer.width - textWidth) / 2;
+      const int y = footer.y + start + (extent - lineHeight) / 2;
+      renderer.drawText(kHomeHintFont, x, y, label.c_str());
+    } else {
+      const int x = footer.x + start;
+      const int textY = footer.y + (footer.height - renderer.getLineHeight(kHomeHintFont)) / 2;
+      drawHintLabel(renderer, kHomeHintFont, labels[i], x, extent, textY, renderer.getLineHeight(kHomeHintFont));
+    }
+  }
 }
 
 bool MinimalTheme::redrawMenuSelection(GfxRenderer& renderer, const Rect rect, const int buttonCount,
