@@ -5,15 +5,18 @@
 #include "Arduino.h"
 #include "HalStorage.h"
 #include "Logging.h"
-#include "driver/temperature_sensor.h"
 #include "esp_debug_helpers.h"
+#include "soc/soc_caps.h"
+#if SOC_TEMP_SENSOR_SUPPORTED
+#include "esp_efuse_rtc_calib.h"
+#include "esp_private/sar_periph_ctrl.h"
+#endif
 #include "esp_memory_utils.h"
 #include "esp_private/esp_cpu_internal.h"
 #include "esp_private/esp_system_attr.h"
 #include "esp_private/panic_internal.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
-#include "soc/soc_caps.h"
 #if !__riscv
 #include <xtensa_context.h>  // XtExcFrame for the stack capture below
 #endif
@@ -23,7 +26,7 @@
 
 #if SOC_TEMP_SENSOR_SUPPORTED
 namespace {
-// Serialize the full driver lifecycle without a heap allocation at boot.
+// Serialize app-owned sensor power and read operations without heap allocation.
 StaticSemaphore_t temperatureSensorMutexStorage;
 const SemaphoreHandle_t temperatureSensorMutex = xSemaphoreCreateMutexStatic(&temperatureSensorMutexStorage);
 
@@ -35,6 +38,12 @@ class TemperatureSensorMutexGuard {
   ~TemperatureSensorMutexGuard() {
     if (mutex && xSemaphoreGive(mutex) != pdTRUE) LOG_ERR("SYS", "Cannot unlock SoC temperature sensor");
   }
+};
+
+class TemperatureSensorPowerGuard {
+ public:
+  TemperatureSensorPowerGuard() { temperature_sensor_power_acquire(); }
+  ~TemperatureSensorPowerGuard() { temperature_sensor_power_release(); }
 };
 }  // namespace
 #endif
@@ -235,33 +244,27 @@ bool readInternalTemperatureCelsius(float& celsius) {
   }
   const TemperatureSensorMutexGuard lock(temperatureSensorMutex);
 
-  temperature_sensor_config_t config{};
-  config.range_min = 10;
-  config.range_max = 50;
-  config.clk_src = TEMPERATURE_SENSOR_CLK_SRC_DEFAULT;
-  config.flags.allow_pd = 0;
-
-  temperature_sensor_handle_t sensor = nullptr;
-  const esp_err_t installResult = temperature_sensor_install(&config, &sensor);
-  if (installResult != ESP_OK || !sensor) {
-    LOG_ERR("SYS", "Cannot install SoC temperature sensor: %s", esp_err_to_name(installResult));
-    if (sensor && temperature_sensor_uninstall(sensor) != ESP_OK)
-      LOG_ERR("SYS", "Cannot uninstall partially installed SoC temperature sensor");
+  float calibration = 0.0f;
+  const esp_err_t calibrationResult = esp_efuse_rtc_calib_get_tsens_val(&calibration);
+  if (calibrationResult != ESP_OK) {
+    LOG_ERR("SYS", "Cannot read SoC temperature calibration: %s", esp_err_to_name(calibrationResult));
     return false;
   }
 
-  const esp_err_t enableResult = temperature_sensor_enable(sensor);
-  float reading = 0.0f;
-  const esp_err_t readResult = enableResult == ESP_OK ? temperature_sensor_get_celsius(sensor, &reading) : enableResult;
-  const esp_err_t disableResult = enableResult == ESP_OK ? temperature_sensor_disable(sensor) : ESP_OK;
-  const esp_err_t uninstallResult = temperature_sensor_uninstall(sensor);
-  if (enableResult != ESP_OK || readResult != ESP_OK || disableResult != ESP_OK || uninstallResult != ESP_OK) {
-    LOG_ERR("SYS", "SoC temperature read failed: enable=%s read=%s disable=%s uninstall=%s",
-            esp_err_to_name(enableResult), esp_err_to_name(readResult), esp_err_to_name(disableResult),
-            esp_err_to_name(uninstallResult));
+  int16_t sensorCelsius = 0;
+  {
+    // The HAL-level helper owns power, settling, and range selection without
+    // allocating the opaque handle used by the higher-level driver API.
+    TemperatureSensorPowerGuard sensorPower;
+    sensorCelsius = temp_sensor_get_raw_value(nullptr);
+  }
+  if (sensorCelsius < -40 || sensorCelsius > 125) {
+    LOG_ERR("SYS", "SoC temperature sensor returned an invalid raw reading");
     return false;
   }
-  if (!(reading >= -100.0f && reading <= 200.0f)) {
+
+  const float reading = static_cast<float>(sensorCelsius) - calibration / 10.0f;
+  if (!(reading >= -40.0f && reading <= 125.0f)) {
     LOG_ERR("SYS", "SoC temperature sensor returned an invalid reading");
     return false;
   }

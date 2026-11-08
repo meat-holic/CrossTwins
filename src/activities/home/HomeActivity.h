@@ -96,7 +96,6 @@ class HomeActivity final : public Activity {
         cleanInitialRefresh(cleanInitialRefresh) {}
   void onEnter() override;
   void onExit() override;
-  void onResume() override;
   void loop() override;
   void render(RenderLock&&) override;
   bool isHomeActivity() const override { return true; }

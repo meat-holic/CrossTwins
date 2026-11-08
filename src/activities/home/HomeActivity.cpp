@@ -291,17 +291,12 @@ void HomeActivity::configureForTheme(const bool preserveSelection) {
 
 void HomeActivity::onEnter() {
   Activity::onEnter();
+  // Reader navigation replaces Home, so returning from a book reaches this path.
   if (UITheme::getInstance().isThemeActive(CrossPointSettings::DOS)) DosTheme::refreshHomeSystemInfo(renderer);
   configureForTheme(false);
 
   // Trigger first update
   requestUpdate();
-}
-
-void HomeActivity::onResume() {
-  if (configuredTheme == SETTINGS.uiTheme && UITheme::getInstance().isThemeActive(CrossPointSettings::DOS)) {
-    DosTheme::refreshHomeSystemInfo(renderer);
-  }
 }
 
 void HomeActivity::onExit() {
