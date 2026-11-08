@@ -641,14 +641,8 @@ void HomeActivity::render(RenderLock&&) {
     if (theme.redrawMenuSelection(renderer, minimalLayout.menu, static_cast<int>(menuItems.size()), previousMenuIndex,
                                   selectedMenuIndex,
                                   [&menuItems](int index) { return std::string(menuItems[index]); })) {
-      if (previousSelectorIndex == 0) {
-        GUI.drawHomeRecentBooks(renderer, minimalLayout.recent, recentBooks, -1, recentBookProgress.data(),
-                                recentBooks.size());
-      }
-      if (selectorIndex == 0) {
-        GUI.drawHomeRecentBooks(renderer, minimalLayout.recent, recentBooks, 0, recentBookProgress.data(),
-                                recentBooks.size());
-      }
+      // Recent-book details are informational; only the menu row changes on
+      // selection movement.
       minimalSelectionRedraw.selectionRendered(selectorIndex);
       renderer.displayBuffer(HalDisplay::FAST_REFRESH);
       return;
@@ -669,7 +663,11 @@ void HomeActivity::render(RenderLock&&) {
   const char* headerTitle = minimalTheme                                                ? nullptr
                             : metrics.homeContinueReadingInMenu && !recentBooks.empty() ? recentBooks[0].title.c_str()
                                                                                         : nullptr;
-  GUI.drawHeader(renderer, headerRect, headerTitle, nullptr, false);
+  if (minimalTheme) {
+    static_cast<const MinimalTheme&>(GUI).drawHomeHeader(renderer, headerRect);
+  } else {
+    GUI.drawHeader(renderer, headerRect, headerTitle, nullptr, false);
+  }
 
   // Record the tile rect so storeCoverBuffer (called from the theme) knows
   // which sub-region of the framebuffer to snapshot. ~16 KB in Portrait
@@ -702,11 +700,16 @@ void HomeActivity::render(RenderLock&&) {
                             content.width,
                             pageHeight - (metrics.headerHeight + metrics.homeTopPadding + metrics.verticalSpacing +
                                           metrics.homeMenuTopOffset + metrics.buttonHintsHeight)};
-  GUI.drawButtonMenu(
-      renderer, menuRect, static_cast<int>(menuItems.size()),
-      metrics.homeContinueReadingInMenu ? selectorIndex : selectorIndex - recentBooks.size(),
-      [&menuItems](int index) { return std::string(menuItems[index]); },
-      [&menuIcons](int index) { return menuIcons[index]; });
+  const int selectedMenuIndex =
+      metrics.homeContinueReadingInMenu ? selectorIndex : selectorIndex - static_cast<int>(recentBooks.size());
+  const auto menuLabel = [&menuItems](int index) { return std::string(menuItems[index]); };
+  if (minimalTheme) {
+    static_cast<const MinimalTheme&>(GUI).drawHomeButtonMenu(renderer, menuRect, static_cast<int>(menuItems.size()),
+                                                             selectedMenuIndex, menuLabel);
+  } else {
+    GUI.drawButtonMenu(renderer, menuRect, static_cast<int>(menuItems.size()), selectedMenuIndex, menuLabel,
+                       [&menuIcons](int index) { return menuIcons[index]; });
+  }
 
   const auto labels = mappedInput.mapLabels(recentBooks.empty() ? "" : tr(STR_RESUME), tr(STR_SELECT), tr(STR_DIR_UP),
                                             tr(STR_DIR_DOWN));

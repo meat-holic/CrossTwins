@@ -111,7 +111,24 @@ Upon turning the device on for the first time, you will be placed on the **[Home
 
 The Home screen is the main entry point to the firmware. From here you can navigate to **[Reading Mode](#4-reading-mode)** with the most recently read book, **[Browse Files](#33-browse-files-screen)**, the **[Library](#34-library-screen)**, **[File Transfer](#35-file-transfer-screen)**, or **[Settings](#36-settings)**.
 
-The **Minimal** home theme shows recent-book details above a text menu. With Minimal selected, open **Settings → Display** to choose left, center, or right menu alignment and optionally select a BMP file from the SD card as a background. The image is fit inside the middle content area, between the status area and the button hints; recent-book details and menu text appear over it.
+The **Minimal** home theme shows recent-book details above a text menu. Recent-book details are informational and do not take on the menu's selection highlight. With Minimal selected, open **Settings → Display** to choose left, center, or right alignment and optionally select a BMP from the SD card as a background. The selected alignment applies to both recent-book text and the menu. The image is center-cropped to fill the middle content area; the status area and button-hint area remain outside it. Subscreens retain RoundedRaff's shared headers, version information, list styling, and button hints.
+
+#### Minimal background image guide
+
+Use an uncompressed BMP matching the visible home content area's aspect ratio for one-to-one display. Larger sources are reduced after a centered crop; smaller sources are never enlarged, so white margins may remain. Recent-book titles are rendered on one line; CR/LF and tab characters are normalized to spaces, then UTF-8-aware ellipsis truncation keeps the text inside its aligned text block.
+
+| Device | Orientation | Background rectangle (x, y, width, height) | Recommended BMP size |
+| --- | --- | --- | --- |
+| X4 | Portrait | (3, 62, 474, 695) | 474 × 695 |
+| X4 | Portrait inverted | (3, 62, 474, 729) | 474 × 729 |
+| X4 | Landscape clockwise | (43, 62, 748, 415) | 748 × 415 |
+| X4 | Landscape counter-clockwise | (9, 62, 748, 415) | 748 × 415 |
+| X3 | Portrait | (3, 62, 522, 687) | 522 × 687 |
+| X3 | Portrait inverted | (3, 62, 522, 721) | 522 × 721 |
+| X3 | Landscape clockwise | (43, 62, 740, 463) | 740 × 463 |
+| X3 | Landscape counter-clockwise | (9, 62, 740, 463) | 740 × 463 |
+
+These logical-pixel coordinates use the current X3/X4 bezel insets and the 40-pixel physical-button hint band. The status area ends at Y=62. The image rectangle ends at Y=757 on X4 and Y=749 on X3 in portrait. In landscape, the button-hint area is a side band: the image starts at X=43 clockwise and X=9 counter-clockwise. RoundedRaff's shared button-hint renderer draws outlined hint groups, not a separate separator line; the hint groups remain outside the image area. The renderer clips the BMP to the listed background rectangle.
 
 ### 3.2 Reading Mode
 

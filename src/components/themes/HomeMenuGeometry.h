@@ -20,6 +20,19 @@ inline int alignedRowX(const int menuX, const int menuWidth, const int sidePaddi
   return menuX + sidePadding;
 }
 
+inline int alignedTextX(const int blockX, const int blockWidth, const int textWidth, const int sidePadding,
+                        const Alignment alignment) {
+  switch (alignment) {
+    case Alignment::LEFT:
+      return blockX + sidePadding;
+    case Alignment::CENTER:
+      return blockX + (blockWidth - textWidth) / 2;
+    case Alignment::RIGHT:
+      return blockX + blockWidth - sidePadding - textWidth;
+  }
+  return blockX + sidePadding;
+}
+
 inline Alignment fromSetting(const uint8_t value) {
   switch (value) {
     case static_cast<uint8_t>(Alignment::CENTER):
