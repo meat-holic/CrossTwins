@@ -186,6 +186,7 @@ void ActivityManager::loop() {
 
         // Request an update to ensure the popped activity gets re-rendered
         if (pendingAction == PendingAction::None) {
+          currentActivity->onResume();
           requestUpdate();
         }
 

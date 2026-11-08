@@ -4,7 +4,11 @@
 #include <FreeInkUIGfxRenderer.h>
 #include <GfxRenderer.h>
 #include <HalGPIO.h>
+#include <HalMemory.h>
 #include <I18n.h>
+#include <driver/temperature_sensor.h>
+#include <esp_rtc_time.h>
+#include <soc/soc_caps.h>
 
 #include <algorithm>
 #include <cstdio>
@@ -22,17 +26,119 @@
 namespace {
 namespace fui = freeink::ui;
 
+struct DosSysInfoDisplay {
+  char memoryLines[3][48];
+  int memoryLineCount;
+  char cpuLines[2][48];
+  int cpuLineCount;
+};
+
+DosSysInfoDisplay dosSysInfoDisplay{};
+
+#if SOC_TEMP_SENSOR_SUPPORTED
+bool readChipTemperature(float& celsius) {
+  // This is the SoC's internal temperature sensor, not an ambient-temperature reading.
+  temperature_sensor_config_t config;
+  config.range_min = 10;
+  config.range_max = 50;
+  config.clk_src = TEMPERATURE_SENSOR_CLK_SRC_DEFAULT;
+  config.flags.allow_pd = 0;
+
+  temperature_sensor_handle_t sensor = nullptr;
+  if (temperature_sensor_install(&config, &sensor) != ESP_OK || !sensor) return false;
+
+  bool enabled = false;
+  bool measured = false;
+  if (temperature_sensor_enable(sensor) == ESP_OK) {
+    enabled = true;
+    measured = temperature_sensor_get_celsius(sensor, &celsius) == ESP_OK;
+  }
+
+  const bool disabled = !enabled || temperature_sensor_disable(sensor) == ESP_OK;
+  const bool uninstalled = temperature_sensor_uninstall(sensor) == ESP_OK;
+  return measured && disabled && uninstalled && celsius >= -100.0f && celsius <= 200.0f;
+}
+#endif
+
+void appendTemperatureLabel(char* output, const size_t outputSize, const bool valid, const float celsius) {
+  if (!output || outputSize == 0) return;
+  if (!valid) {
+    std::snprintf(output, outputSize, "%s %s", tr(STR_DOS_SYSINFO_TEMP), tr(STR_DOS_SYSINFO_NA));
+    return;
+  }
+
+  const int tenths = static_cast<int>(celsius * 10.0f + (celsius >= 0.0f ? 0.5f : -0.5f));
+  const int absoluteTenths = tenths < 0 ? -tenths : tenths;
+  std::snprintf(output, outputSize, "%s %s%d.%dC", tr(STR_DOS_SYSINFO_TEMP), tenths < 0 ? "-" : "", absoluteTenths / 10,
+                absoluteTenths % 10);
+}
+
+void cacheSysInfoLines(const GfxRenderer& renderer, const size_t freeHeapBytes, const size_t largestBlockBytes,
+                       const bool temperatureValid, const float temperatureC, const uint32_t cpuMHz,
+                       const uint64_t uptimeSeconds) {
+  // Keep temporary formatting storage below the activity loop's stack budget.
+  char scratch[64];
+  DosSysInfoDisplay& cached = dosSysInfoDisplay;
+  char* const freeLabel = cached.memoryLines[0];
+  char* const maxLabel = cached.memoryLines[1];
+  char* const temperatureLabel = cached.memoryLines[2];
+  std::snprintf(freeLabel, sizeof(cached.memoryLines[0]), "%s %zuK", tr(STR_DOS_SYSINFO_FREE), freeHeapBytes / 1024U);
+  std::snprintf(maxLabel, sizeof(cached.memoryLines[1]), "%s %zuK", tr(STR_DOS_SYSINFO_MAX), largestBlockBytes / 1024U);
+  appendTemperatureLabel(temperatureLabel, sizeof(cached.memoryLines[2]), temperatureValid, temperatureC);
+
+  if (cpuMHz > 0) {
+    std::snprintf(cached.cpuLines[0], sizeof(cached.cpuLines[0]), "%s %uMHz", tr(STR_DOS_SYSINFO_CPU),
+                  static_cast<unsigned>(cpuMHz));
+  } else {
+    std::snprintf(cached.cpuLines[0], sizeof(cached.cpuLines[0]), "%s %s", tr(STR_DOS_SYSINFO_CPU),
+                  tr(STR_DOS_SYSINFO_NA));
+  }
+  dos_layout::formatUptimeLabel(cached.cpuLines[1], sizeof(cached.cpuLines[1]), uptimeSeconds, tr(STR_DOS_SYSINFO_UP));
+
+  const int contentX = std::max(1, renderer.getScreenWidth() * 60 / 1000);
+  const int availableWidth = std::max(0, renderer.getScreenWidth() - 2 * contentX);
+  cached.memoryLineCount = 0;
+  cached.cpuLineCount = 0;
+
+  std::snprintf(scratch, sizeof(scratch), "%s  %s  %s", freeLabel, maxLabel, temperatureLabel);
+  if (renderer.getTextWidth(UI_10_FONT_ID, scratch) <= availableWidth) {
+    std::snprintf(cached.memoryLines[0], sizeof(cached.memoryLines[0]), "%s", scratch);
+    cached.memoryLineCount = 1;
+  } else {
+    std::snprintf(scratch, sizeof(scratch), "%s  %s", freeLabel, maxLabel);
+    if (renderer.getTextWidth(UI_10_FONT_ID, scratch) <= availableWidth) {
+      std::snprintf(cached.memoryLines[0], sizeof(cached.memoryLines[0]), "%s", scratch);
+      std::snprintf(cached.memoryLines[1], sizeof(cached.memoryLines[1]), "%s", temperatureLabel);
+      cached.memoryLineCount = 2;
+    } else {
+      cached.memoryLineCount = 3;
+    }
+  }
+
+  std::snprintf(scratch, sizeof(scratch), "%s  %s", cached.cpuLines[0], cached.cpuLines[1]);
+  if (renderer.getTextWidth(UI_10_FONT_ID, scratch) <= availableWidth) {
+    std::snprintf(cached.cpuLines[0], sizeof(cached.cpuLines[0]), "%s", scratch);
+    cached.cpuLineCount = 1;
+  } else {
+    cached.cpuLineCount = 2;
+  }
+}
+
 int scalePermille(const int value, const int permille) { return (value * permille + 500) / 1000; }
 
 dos_layout::FontMetrics homeFontMetrics(const GfxRenderer& renderer) {
   const auto& metrics = UITheme::getInstance().getMetrics();
+  const int memoryRows = std::clamp(dosSysInfoDisplay.memoryLineCount, 1, 3);
+  const int cpuRows = std::clamp(dosSysInfoDisplay.cpuLineCount, 1, 2);
   return {renderer.getLineHeight(uiScaleSpec().titleFontId),
           renderer.getLineHeight(UI_10_FONT_ID),
           renderer.getLineHeight(UI_12_FONT_ID),
           renderer.getLineHeight(UI_10_FONT_ID),
           renderer.getLineHeight(UI_12_FONT_ID),
           metrics.batteryBarHeight,
-          metrics.topPadding};
+          metrics.topPadding,
+          memoryRows,
+          cpuRows};
 }
 
 std::string coreFirmwareVersion(const char* version) {
@@ -60,8 +166,8 @@ void drawDosHomeHeader(const GfxRenderer& renderer, const Rect rect, const char*
   const fui::Rect band{static_cast<int16_t>(rect.x), static_cast<int16_t>(rect.y), static_cast<int16_t>(rect.width),
                        static_cast<int16_t>(rect.height)};
   fui::HeaderProps props;
-  // Draw only the existing status chrome here. The DOS title, heap value, and
-  // ASCII rule are placed explicitly from the font-derived home geometry.
+  // Draw only the existing status chrome here. The DOS title and ASCII rules
+  // are placed explicitly from the font-derived home geometry.
   props.title = nullptr;
   BaseTheme::applyHeaderStatus(renderer, props);
   props.titleText = tokens.titleText;
@@ -90,13 +196,6 @@ void drawDosHomeHeader(const GfxRenderer& renderer, const Rect rect, const char*
   const int titleWidth = renderer.getTextWidth(titleFontId, title);
   renderer.drawText(titleFontId, std::max(0, (screenWidth - titleWidth) / 2), layout.titleY, title, true);
 
-  // ESP.getFreeHeap() is currently available heap, not the device's total
-  // physical RAM capacity.
-  char memoryLabel[32];
-  dos_layout::formatFreeHeapLabel(memoryLabel, sizeof(memoryLabel), ESP.getFreeHeap());
-  const int memoryWidth = renderer.getTextWidth(UI_10_FONT_ID, memoryLabel);
-  renderer.drawText(UI_10_FONT_ID, std::max(0, (screenWidth - memoryWidth) / 2), layout.memoryY, memoryLabel, true);
-
   const auto& metrics = UITheme::getInstance().getMetrics();
   const int sideMargin = std::max(12, metrics.headerSidePadding);
   // UI_10_FONT_ID follows the selected system font; its configured UI-font
@@ -113,7 +212,9 @@ void drawDosHomeHeader(const GfxRenderer& renderer, const Rect rect, const char*
     ruleWidth = renderer.getTextWidth(UI_10_FONT_ID, rule);
   }
   if (characterCount > 0) {
-    renderer.drawText(UI_10_FONT_ID, (screenWidth - ruleWidth) / 2, layout.separatorY, rule, true);
+    const int ruleX = (screenWidth - ruleWidth) / 2;
+    renderer.drawText(UI_10_FONT_ID, ruleX, layout.topSeparatorY, rule, true);
+    renderer.drawText(UI_10_FONT_ID, ruleX, layout.separatorY, rule, true);
   }
 }
 
@@ -180,9 +281,10 @@ DosHomeLayout DosTheme::homeLayout(const GfxRenderer& renderer, int recentBookCo
   layout.header = Rect{geometry.header.x, geometry.header.y, geometry.header.width, geometry.header.height};
   layout.recent = Rect{geometry.recent.x, geometry.recent.y, geometry.recent.width, geometry.recent.height};
   layout.menu = Rect{geometry.menu.x, geometry.menu.y, geometry.menu.width, geometry.menu.height};
+  layout.sysInfo = Rect{geometry.sysInfo.x, geometry.sysInfo.y, geometry.sysInfo.width, geometry.sysInfo.height};
   layout.footer = Rect{geometry.footer.x, geometry.footer.y, geometry.footer.width, geometry.footer.height};
+  layout.topSeparatorY = geometry.topSeparatorY;
   layout.titleY = geometry.titleY;
-  layout.memoryY = geometry.memoryY;
   layout.separatorY = geometry.separatorY;
   layout.contentX = geometry.contentX;
   layout.selectionX = geometry.selectionX;
@@ -200,8 +302,31 @@ DosHomeLayout DosTheme::homeLayout(const GfxRenderer& renderer, int recentBookCo
   layout.menuPreferredRowStep = geometry.menuPreferredRowStep;
   layout.sectionGap = geometry.sectionGap;
   layout.menuRowStep = geometry.menuRowStep;
+  layout.sysInfoLabelY = geometry.sysInfoLabelY;
+  layout.sysInfoMemoryY = geometry.sysInfoMemoryY;
+  layout.sysInfoMemoryRowStep = geometry.sysInfoMemoryRowStep;
+  layout.sysInfoCpuY = geometry.sysInfoCpuY;
+  layout.sysInfoCpuRowStep = geometry.sysInfoCpuRowStep;
+  layout.sysInfoMemoryRows = geometry.sysInfoMemoryRows;
+  layout.sysInfoCpuRows = geometry.sysInfoCpuRows;
   layout.promptY = geometry.promptY;
   return layout;
+}
+
+void DosTheme::refreshHomeSystemInfo(const GfxRenderer& renderer) {
+  float temperatureC = 0.0f;
+  bool temperatureValid = false;
+#if SOC_TEMP_SENSOR_SUPPORTED
+  temperatureValid = readChipTemperature(temperatureC);
+#endif
+  const uint64_t uptimeSeconds = esp_rtc_get_time_us() / 1000000ULL;
+  const uint32_t cpuMHz = ESP.getCpuFreqMHz();
+
+  // Both values describe the same internal byte-addressable heap pool; optional
+  // PSRAM is excluded so these readings reflect firmware's internal RAM headroom.
+  const HalMemory::HeapStats heap = HalMemory::getInternalByteAddressableHeap();
+  cacheSysInfoLines(renderer, heap.freeBytes, heap.largestBlockBytes, temperatureValid, temperatureC, cpuMHz,
+                    uptimeSeconds);
 }
 
 int DosTheme::recentBooksLimit(const GfxRenderer& renderer) {
@@ -243,32 +368,41 @@ void DosTheme::drawButtonMenu(GfxRenderer& renderer, const Rect rect, const int 
     }
   }
   const int rowWidth = std::max(0, renderer.getScreenWidth() - layout.contentX * 2);
-  if (rowWidth <= 0 || rect.height <= 0) return;
+  if (rowWidth <= 0) return;
 
-  const std::string menuPrompt = "C:\\Xteink>Menu";
-  const std::string prompt = "C:\\Xteink>_";
-  renderer.drawText(UI_10_FONT_ID, layout.contentX, layout.menuLabelY, menuPrompt.c_str(), true);
+  renderer.drawText(UI_10_FONT_ID, layout.contentX, layout.menuLabelY, tr(STR_DOS_MENU_PROMPT), true);
 
   const int lineHeight = renderer.getLineHeight(UI_12_FONT_ID);
   const int rowHeight = layout.menuRowHeight;
   const int rowStep = layout.menuRowStep;
-  for (int i = 0; i < buttonCount; ++i) {
-    const int rowY = layout.menuRowsTop + i * rowStep;
-    if (rowY + rowHeight > layout.promptY || rowY + rowHeight > rect.y + rect.height) break;
+  if (rect.height > 0) {
+    for (int i = 0; i < buttonCount; ++i) {
+      const int rowY = layout.menuRowsTop + i * rowStep;
+      if (rowY + rowHeight > layout.menuRowsBottom || rowY + rowHeight > rect.y + rect.height) break;
 
-    const bool selected = selectedIndex == i;
-    if (selected) {
-      renderer.fillRectDither(layout.selectionX, rowY, layout.selectionWidth, rowHeight, Color::LightGray);
+      const bool selected = selectedIndex == i;
+      if (selected) {
+        renderer.fillRectDither(layout.selectionX, rowY, layout.selectionWidth, rowHeight, Color::LightGray);
+      }
+
+      std::string label = selected ? "> " : "  ";
+      label += buttonLabel(i);
+      const std::string line = renderer.truncatedText(UI_12_FONT_ID, label.c_str(), rowWidth);
+      const int textY = rowY + (rowHeight - lineHeight) / 2;
+      renderer.drawText(UI_12_FONT_ID, layout.contentX, textY, line.c_str(), true);
     }
-
-    std::string label = selected ? "> " : "  ";
-    label += buttonLabel(i);
-    const std::string line = renderer.truncatedText(UI_12_FONT_ID, label.c_str(), rowWidth);
-    const int textY = rowY + (rowHeight - lineHeight) / 2;
-    renderer.drawText(UI_12_FONT_ID, layout.contentX, textY, line.c_str(), true);
   }
 
-  renderer.drawText(UI_10_FONT_ID, layout.contentX, layout.promptY, prompt.c_str(), true);
+  renderer.drawText(UI_10_FONT_ID, layout.contentX, layout.sysInfoLabelY, tr(STR_DOS_SYSINFO_PROMPT), true);
+  for (int i = 0; i < layout.sysInfoMemoryRows; ++i) {
+    renderer.drawText(UI_10_FONT_ID, layout.contentX, layout.sysInfoMemoryY + i * layout.sysInfoMemoryRowStep,
+                      dosSysInfoDisplay.memoryLines[i], true);
+  }
+  for (int i = 0; i < layout.sysInfoCpuRows; ++i) {
+    renderer.drawText(UI_10_FONT_ID, layout.contentX, layout.sysInfoCpuY + i * layout.sysInfoCpuRowStep,
+                      dosSysInfoDisplay.cpuLines[i], true);
+  }
+  renderer.drawText(UI_10_FONT_ID, layout.contentX, layout.promptY, tr(STR_DOS_HOME_PROMPT), true);
 }
 
 void DosTheme::drawHomeRecentBooks(GfxRenderer& renderer, const Rect rect, const std::vector<RecentBook>& recentBooks,

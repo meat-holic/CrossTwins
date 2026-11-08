@@ -23,5 +23,7 @@ class HalMemory {
   // Default-capability memory includes PSRAM when registered with the allocator.
   static HeapStats getDefaultHeap();
   static HeapStats getInternalHeap();
+  // Internal, byte-addressable heap used for regular firmware allocations.
+  static HeapStats getInternalByteAddressableHeap();
   static HeapStats getPsramHeap();
 };

@@ -25,15 +25,18 @@ struct FontMetrics {
   int hintLineHeight;
   int statusStripHeight;
   int topPadding;
+  int sysInfoMemoryRows;
+  int sysInfoCpuRows;
 };
 
 struct Geometry {
   Box header;
   Box recent;
   Box menu;
+  Box sysInfo;
   Box footer;
+  int topSeparatorY;
   int titleY;
-  int memoryY;
   int separatorY;
   int contentX;
   int selectionX;
@@ -50,6 +53,13 @@ struct Geometry {
   int menuPreferredRowStep;
   int menuRowStep;
   int menuRowsBottom;
+  int sysInfoLabelY;
+  int sysInfoMemoryY;
+  int sysInfoMemoryRowStep;
+  int sysInfoCpuY;
+  int sysInfoCpuRowStep;
+  int sysInfoMemoryRows;
+  int sysInfoCpuRows;
   int promptY;
   int sectionGap;
   bool contentFits;
@@ -87,9 +97,12 @@ inline int asciiRuleCharacterCount(const int screenWidth, const int sideMargin, 
   return std::min(std::max(0, maxCharacters), availableWidth / positive(glyphWidth));
 }
 
-inline void formatFreeHeapLabel(char* output, const size_t outputSize, const uint32_t freeHeapBytes) {
+inline void formatUptimeLabel(char* output, const size_t outputSize, const uint64_t uptimeSeconds, const char* prefix) {
   if (!output || outputSize == 0) return;
-  std::snprintf(output, outputSize, "%uK bytes free", static_cast<unsigned>(freeHeapBytes / 1024));
+  const unsigned long long hours = static_cast<unsigned long long>(uptimeSeconds / 3600ULL);
+  const unsigned int minutes = static_cast<unsigned int>((uptimeSeconds / 60ULL) % 60ULL);
+  const unsigned int seconds = static_cast<unsigned int>(uptimeSeconds % 60ULL);
+  std::snprintf(output, outputSize, "%s %02llu:%02u:%02u", prefix ? prefix : "", hours, minutes, seconds);
 }
 
 inline Geometry calculate(const int screenWidth, const int screenHeight, const FontMetrics& font,
@@ -101,6 +114,9 @@ inline Geometry calculate(const int screenWidth, const int screenHeight, const F
   const int bodyLine = positive(font.bodyLineHeight);
   const int progressLine = positive(font.progressLineHeight);
   const int hintLine = positive(font.hintLineHeight);
+  const int sysInfoMemoryRows = std::clamp(font.sysInfoMemoryRows, 1, 3);
+  const int sysInfoCpuRows = std::clamp(font.sysInfoCpuRows, 1, 2);
+  const int sysInfoLineCount = 2 + sysInfoMemoryRows + sysInfoCpuRows;
   int smallGap = std::max(2, sectionLine / 4);
   int sectionGap = std::max(4, sectionLine / 2);
   int menuRowPadding = std::max(1, bodyLine / 10);
@@ -132,10 +148,11 @@ inline Geometry calculate(const int screenWidth, const int screenHeight, const F
     const int recentMinimum =
         sectionGap + sectionLine + sectionGap + recentBottomOffset + smallGap + sectionLine + smallGap;
     const int rowHeight = bodyLine + menuRowPadding * 2;
-    const int menuMinimum =
-        sectionLine + sectionGap + MAX_MENU_ITEMS * rowHeight + (MAX_MENU_ITEMS - 1) * smallGap + 2 * sectionGap;
-    return top + headerHeight() + recentMinimum + menuMinimum + sectionLine + hintLine + 2 * footerPadding +
-           bottomInset;
+    const int menuRowsHeight = MAX_MENU_ITEMS * rowHeight + (MAX_MENU_ITEMS - 1) * smallGap;
+    const int sysInfoHeight = sysInfoLineCount * sectionLine + (sysInfoLineCount - 1) * smallGap;
+    const int menuMinimum = sectionLine + sectionGap + menuRowsHeight + sectionGap + sysInfoHeight + sectionGap;
+    const int footerHeight = hintLine + 2 * footerPadding;
+    return top + headerHeight() + recentMinimum + menuMinimum + footerHeight + bottomInset;
   };
   while (requiredHeight() > height && sectionGap > 1) --sectionGap;
   while (requiredHeight() > height && smallGap > 1) --smallGap;
@@ -150,7 +167,12 @@ inline Geometry calculate(const int screenWidth, const int screenHeight, const F
   const int footerHeight = hintLine + footerPadding * 2;
   const int footerY = std::max(headerBottom, height - bottomInset - footerHeight);
   const int promptY = std::max(headerBottom, footerY - sectionGap - sectionLine);
-  const int menuRowsBottom = std::max(headerBottom, promptY - sectionGap);
+  const int sysInfoCpuHeight = sysInfoCpuRows * sectionLine + (sysInfoCpuRows - 1) * smallGap;
+  const int sysInfoCpuY = promptY - smallGap - sysInfoCpuHeight;
+  const int sysInfoMemoryHeight = sysInfoMemoryRows * sectionLine + (sysInfoMemoryRows - 1) * smallGap;
+  const int sysInfoMemoryY = sysInfoCpuY - smallGap - sysInfoMemoryHeight;
+  const int sysInfoLabelY = sysInfoMemoryY - smallGap - sectionLine;
+  const int menuRowsBottom = std::max(headerBottom, sysInfoLabelY - sectionGap);
 
   const int recentProgressOffset = bodyLine + recentLineGap;
   const int minimumRecentRowStep = recentProgressOffset + progressLine + recentBlockGap;
@@ -164,9 +186,9 @@ inline Geometry calculate(const int screenWidth, const int screenHeight, const F
   const int selectionX = std::max(0, width * 36 / 1000);
   const int selectionWidth = std::max(0, width * 920 / 1000);
   const int recentLabelY = headerBottom + sectionGap;
-  const int titleY = top + positive(font.statusStripHeight) + smallGap;
-  const int memoryY = titleY + titleLine + smallGap;
-  const int separatorY = memoryY + sectionLine + smallGap;
+  const int topSeparatorY = top + positive(font.statusStripHeight) + smallGap;
+  const int titleY = topSeparatorY + sectionLine + smallGap;
+  const int separatorY = titleY + titleLine + smallGap;
   const int recentRowsTop = recentLabelY + sectionLine + sectionGap;
   const int recentRenderedBottom = recentBookCount == 0 ? recentRowsTop + bodyLine
                                                         : recentRowsTop + (recentBookCount - 1) * recentRowStep +
@@ -185,9 +207,10 @@ inline Geometry calculate(const int screenWidth, const int screenHeight, const F
   result.header = {0, top, width, std::max(0, headerBottom - top)};
   result.recent = {0, headerBottom, width, std::max(0, recentBottom - headerBottom)};
   result.menu = {0, recentBottom, width, std::max(0, footerY - recentBottom)};
+  result.sysInfo = {0, sysInfoLabelY, width, std::max(0, promptY + sectionLine - sysInfoLabelY)};
   result.footer = {0, footerY, width, std::max(0, height - footerY)};
+  result.topSeparatorY = topSeparatorY;
   result.titleY = titleY;
-  result.memoryY = memoryY;
   result.separatorY = separatorY;
   result.contentX = std::min(contentX, std::max(0, width / 3));
   result.selectionX = selectionX;
@@ -204,10 +227,19 @@ inline Geometry calculate(const int screenWidth, const int screenHeight, const F
   result.menuPreferredRowStep = preferredMenuStep;
   result.menuRowStep = menuRowStep;
   result.menuRowsBottom = menuRowsBottom;
+  result.sysInfoLabelY = sysInfoLabelY;
+  result.sysInfoMemoryY = sysInfoMemoryY;
+  result.sysInfoMemoryRowStep = sectionLine + smallGap;
+  result.sysInfoCpuY = sysInfoCpuY;
+  result.sysInfoCpuRowStep = sectionLine + smallGap;
+  result.sysInfoMemoryRows = sysInfoMemoryRows;
+  result.sysInfoCpuRows = sysInfoCpuRows;
   result.promptY = promptY;
   result.sectionGap = sectionGap;
-  result.contentFits =
-      recentContentBottom <= menuLabelY && menuRenderedBottom <= menuRowsBottom && menuRowStep >= menuRowHeight;
+  result.contentFits = recentContentBottom <= menuLabelY && menuRenderedBottom <= menuRowsBottom &&
+                       menuRowStep >= menuRowHeight && sysInfoLabelY >= menuRowsBottom + sectionGap &&
+                       sysInfoLabelY >= headerBottom && promptY + sectionLine <= footerY - sectionGap &&
+                       footerY + footerHeight <= height - bottomInset;
   return result;
 }
 

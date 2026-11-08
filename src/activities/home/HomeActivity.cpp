@@ -243,6 +243,7 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
 
 void HomeActivity::onEnter() {
   Activity::onEnter();
+  if (SETTINGS.uiTheme == CrossPointSettings::DOS) DosTheme::refreshHomeSystemInfo(renderer);
 
   hasOpdsServers = OPDS_STORE.hasServers();
   // Plugin System is the global opt-in. Once enabled, expose the Plugins entry
@@ -273,12 +274,15 @@ void HomeActivity::onEnter() {
   }
 
   const auto base = static_cast<int>(recentBooks.size());
-  selectorIndex = initialMenuItem == HomeMenuItem::NONE
-                      ? (dosTheme ? base : 0)
-                      : base + menuItemToIndex(initialMenuItem, hasLibrarySlot());
+  selectorIndex = initialMenuItem == HomeMenuItem::NONE ? (dosTheme ? base : 0)
+                                                        : base + menuItemToIndex(initialMenuItem, hasLibrarySlot());
 
   // Trigger first update
   requestUpdate();
+}
+
+void HomeActivity::onResume() {
+  if (SETTINGS.uiTheme == CrossPointSettings::DOS) DosTheme::refreshHomeSystemInfo(renderer);
 }
 
 void HomeActivity::onExit() {
