@@ -14,6 +14,15 @@ TEST(ReleaseVersion, OrdersRcRevisionsBeforeTheFinalRelease) {
   EXPECT_TRUE(release_version::isNewer("2.0.0", "2.0.0-rc2.rev.2"));
 }
 
+TEST(ReleaseVersion, OrdersStableRevisionsAfterTheBaseAndRcVersions) {
+  EXPECT_TRUE(release_version::isNewer("2.0.0-rev.1", "2.0.0"));
+  EXPECT_TRUE(release_version::isNewer("2.0.0-rev.2", "2.0.0-rev.1"));
+  EXPECT_TRUE(release_version::isNewer("2.0.0-rev.1", "2.0.0-rc2.rev.99"));
+  EXPECT_TRUE(release_version::isNewer("2.0.1-rc1", "2.0.0-rev.2"));
+  EXPECT_FALSE(release_version::isNewer("2.0.0", "2.0.0-rev.1"));
+  EXPECT_FALSE(release_version::isNewer("2.0.0-rev.1", "2.0.0-rev.1"));
+}
+
 TEST(ReleaseVersion, HandlesVPrefixAndRejectsEqualOrOlderVersions) {
   EXPECT_TRUE(release_version::isNewer("v2.0.0-rc2.rev.2", "2.0.0-rc2.rev.1"));
   EXPECT_FALSE(release_version::isNewer("v2.0.0-rc2.rev.2", "2.0.0-rc2.rev.2"));
@@ -30,7 +39,7 @@ TEST(ReleaseVersion, ComparesMajorMinorPatchAndRcNumbers) {
 }
 
 TEST(ReleaseVersion, RejectsMalformedTagsAndOverflow) {
-  constexpr std::array<std::string_view, 12> invalid = {"",
+  constexpr std::array<std::string_view, 15> invalid = {"",
                                                         "v",
                                                         "2.0",
                                                         "2.0.0.1",
@@ -39,8 +48,11 @@ TEST(ReleaseVersion, RejectsMalformedTagsAndOverflow) {
                                                         "2.0.0-RC2",
                                                         "2.0.0-rc2.foo",
                                                         "2.0.0-rc2.rev",
+                                                        "2.0.0-rev",
                                                         "02.0.0",
                                                         "2.0.0-rc02",
+                                                        "2.0.0-rev.01",
+                                                        "2.0.0-rev.4294967296",
                                                         "4294967296.0.0"};
   for (const auto version : invalid) {
     release_version::Version parsed;
@@ -72,6 +84,8 @@ TEST(ReleaseAssetName, NormalizesTagWithoutChangingItsStoredSpelling) {
   EXPECT_STREQ(name, "crosstwins-2.0.0-rc2.rev.2-x3-x4.bin");
   EXPECT_TRUE(release_asset::buildFirmwareAssetName("2.0.0-rc2.rev.2", "papermono", name, sizeof(name)));
   EXPECT_STREQ(name, "crosstwins-2.0.0-rc2.rev.2-papermono.bin");
+  EXPECT_TRUE(release_asset::buildFirmwareAssetName("v2.0.0-rev.1", "x4", name, sizeof(name)));
+  EXPECT_STREQ(name, "crosstwins-2.0.0-rev.1-x3-x4.bin");
 }
 
 TEST(ReleaseAssetName, RejectsMalformedTagsUnknownBoardsAndSmallBuffers) {

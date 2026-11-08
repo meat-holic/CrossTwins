@@ -1,3 +1,7 @@
 #pragma once
 
-#define CROSSTWINS_VERSION_DISPLAY "CrossTwins 2.0.0"
+#if defined(CROSSTWINS_USE_BUILD_VERSION) && defined(CROSSPOINT_VERSION)
+#define CROSSTWINS_VERSION_DISPLAY "CrossTwins " CROSSPOINT_VERSION
+#else
+#define CROSSTWINS_VERSION_DISPLAY "CrossTwins 2.0.0-rev.1"
+#endif

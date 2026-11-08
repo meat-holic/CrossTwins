@@ -1,17 +1,87 @@
 name: Compile Release
 
-# Build and attach firmware only after a release is published. The release tag
-# supplies both the source revision and the version in each asset name.
-
+# Build and verify a draft first. Publishing is a separate final step so the
+# release event cannot start a duplicate build or expose incomplete assets.
 on:
-  release:
-    types: [published]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing draft release tag to build and verify
+        required: true
+        type: string
+
+concurrency:
+  group: publish-release-${{ inputs.release_tag }}
+  cancel-in-progress: false
 
 permissions:
   contents: read
 
 jobs:
+  validate-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      release_tag: ${{ steps.validate.outputs.release_tag }}
+      release_version: ${{ steps.validate.outputs.release_version }}
+      source_commit: ${{ steps.validate.outputs.source_commit }}
+      prerelease: ${{ steps.validate.outputs.prerelease }}
+      rc_build: ${{ steps.validate.outputs.rc_build }}
+      release_id: ${{ steps.validate.outputs.release_id }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+
+      - name: Validate draft, version, and source commit
+        id: validate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          python scripts/release_assets.py list --tag "$RELEASE_TAG" >/dev/null
+          configured_version="$(sed -n 's/^version = //p' platformio.ini | head -n1)"
+          release_json="$(gh api --paginate --slurp "repos/${GITHUB_REPOSITORY}/releases" | \
+            jq -ce --arg tag "$RELEASE_TAG" \
+              '[.[][] | select(.tag_name == $tag)] | if length == 1 then .[0] else error("expected exactly one release") end')"
+          test "$(jq -r '.tag_name' <<< "$release_json")" = "$RELEASE_TAG"
+          test "$(jq -r '.draft' <<< "$release_json")" = "true"
+          test "$(jq -r '.assets | length' <<< "$release_json")" = "0"
+          prerelease="$(jq -r '.prerelease' <<< "$release_json")"
+          version="$(python scripts/release_assets.py validate --tag "$RELEASE_TAG" \
+            --configured-version "$configured_version" --prerelease "$prerelease")"
+
+          git fetch --no-tags origin "refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
+          tag_commit="$(git rev-parse "${RELEASE_TAG}^{commit}")"
+          workflow_commit="$(git rev-parse "${GITHUB_SHA}^{commit}")"
+          test "$tag_commit" = "$workflow_commit"
+
+          echo "release_tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+          echo "release_version=$version" >> "$GITHUB_OUTPUT"
+          echo "source_commit=$tag_commit" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
+          if [[ "$version" == *-rc* ]]; then
+            echo "rc_build=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "rc_build=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "release_id=$(jq -r '.id' <<< "$release_json")" >> "$GITHUB_OUTPUT"
+
+      - name: Verify logo, release policy, and release tests
+        run: |
+          python -m pip install 'Pillow==12.3.0'
+          python scripts/generate_logo_1bpp.py --check
+          python scripts/generate_release_asset_policy.py --check
+          python test/test_release_asset_policy.py
+
   build-release:
+    needs: validate-release
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -35,42 +105,17 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.release.tag_name }}
+          ref: ${{ needs.validate-release.outputs.release_tag }}
           submodules: recursive
 
-      - name: Validate release version
+      - name: Confirm build source commit
         env:
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
-          RELEASE_PRERELEASE: ${{ github.event.release.prerelease }}
-        run: |
-          set -euo pipefail
-          version="${RELEASE_TAG#v}"
-          configured_version="$(sed -n 's/^version = //p' platformio.ini | head -n1)"
-          if [ "$version" = "2.0.0-rc2.rev.2" ]; then
-            test "$RELEASE_TAG" = "v2.0.0-rc2.rev.2"
-            test "$RELEASE_PRERELEASE" = "false"
-          fi
-          if [ "${{ github.event.release.prerelease }}" = "true" ]; then
-            configured_series="${configured_version%%-*}"
-            case "$version" in
-              "${configured_series}-rc"*) ;;
-              *) exit 1 ;;
-            esac
-            python scripts/release_assets.py list --tag "$RELEASE_TAG" >/dev/null
-          else
-            test "$version" = "$configured_version"
-          fi
+          EXPECTED_COMMIT: ${{ needs.validate-release.outputs.source_commit }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_COMMIT"
 
       - uses: actions/setup-python@v6
         with:
           python-version: '3.13'
-
-      - name: Verify logo and release asset policy
-        run: |
-          python -m pip install 'Pillow==12.3.0'
-          python scripts/generate_logo_1bpp.py --check
-          python scripts/generate_release_asset_policy.py --check
-          python test/test_release_asset_policy.py
 
       - name: Install uv
         uses: astral-sh/setup-uv@v7
@@ -82,8 +127,7 @@ jobs:
         run: |
           uv pip install --system -U https://github.com/pioarduino/platformio-core/archive/refs/tags/v6.1.19.zip
           # platform-espressif32's builder/main.py imports these unconditionally; its own
-          # penv bootstrap (builder/penv_setup.py) is supposed to install them automatically
-          # but isn't picking them up reliably in this runner image, so pin them explicitly.
+          # penv bootstrap is supposed to install them automatically but can miss them.
           uv pip install --system -U "littlefs-python>=0.16.0" "fatfs-ng>=0.1.14" "pyyaml>=6.0.2" \
             "rich-click>=1.8.6" "zopfli>=0.2.2" "intelhex>=2.3.0" "rich>=14.0.0" "urllib3<2" \
             "cryptography>=45.0.3" "certifi>=2025.8.3" "ecdsa>=0.19.1" "bitstring>=4.3.1" \
@@ -91,36 +135,31 @@ jobs:
 
       - name: Pin pioarduino core inside the platform penv
         env:
-          PIO_ENV: ${{ github.event.release.prerelease && matrix.rc_env || matrix.release_env }}
+          PIO_ENV: ${{ needs.validate-release.outputs.rc_build == 'true' && matrix.rc_env || matrix.release_env }}
         run: |
           set -euo pipefail
-          # Envs with custom_sdkconfig run a nested `pio run` from
-          # ~/.platformio/penv. Keep that core on the same version as the outer core.
-          # See https://github.com/pioarduino/platform-espressif32/issues/529
           pio pkg install -e "$PIO_ENV"
           uv pip install --python ~/.platformio/penv/bin/python "pioarduino==6.1.19"
           ~/.platformio/penv/bin/pio --version
 
       - name: Build CrossTwins
         env:
-          PIO_ENV: ${{ github.event.release.prerelease && matrix.rc_env || matrix.release_env }}
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
-          # Enrollment gate for the LCP service: official releases carry this
-          # key, self-builds do not (and lose only LCP). Rotate per release by
-          # updating the repo secret; retire old values in the service's
-          # RELEASE_KEYS list.
+          PIO_ENV: ${{ needs.validate-release.outputs.rc_build == 'true' && matrix.rc_env || matrix.release_env }}
+          RELEASE_VERSION: ${{ needs.validate-release.outputs.release_version }}
           FREEINK_LCP_RELEASE_KEY: ${{ secrets.FREEINK_LCP_RELEASE_KEY }}
         run: |
+          build_flags="-DCROSSTWINS_USE_BUILD_VERSION=1"
           if [ -n "$FREEINK_LCP_RELEASE_KEY" ]; then
-            export PLATFORMIO_BUILD_FLAGS="-DFREEINK_LCP_RELEASE_KEY=\\\"$FREEINK_LCP_RELEASE_KEY\\\""
+            build_flags="$build_flags -DFREEINK_LCP_RELEASE_KEY=\\\"$FREEINK_LCP_RELEASE_KEY\\\""
           fi
-          CROSSPOINT_RELEASE_VERSION="${RELEASE_TAG#v}" pio run -e "$PIO_ENV" -j1
+          CROSSPOINT_RELEASE_VERSION="$RELEASE_VERSION" PLATFORMIO_BUILD_FLAGS="$build_flags" \
+            pio run -e "$PIO_ENV" -j1
 
       - name: Prepare firmware asset
         id: asset
         env:
-          PIO_ENV: ${{ github.event.release.prerelease && matrix.rc_env || matrix.release_env }}
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          PIO_ENV: ${{ needs.validate-release.outputs.rc_build == 'true' && matrix.rc_env || matrix.release_env }}
+          RELEASE_TAG: ${{ needs.validate-release.outputs.release_tag }}
         run: |
           asset="$(python scripts/release_assets.py name --tag "$RELEASE_TAG" --device "${{ matrix.device }}")"
           cp ".pio/build/${PIO_ENV}/firmware.bin" "$asset"
@@ -135,25 +174,34 @@ jobs:
           retention-days: 1
           compression-level: 0
 
-  publish-release:
-    needs: build-release
+  verify-release:
+    needs: [validate-release, build-release]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.release.tag_name }}
+          ref: ${{ needs.validate-release.outputs.release_tag }}
 
-      - name: Refuse pre-existing release assets
+      - name: Recheck draft before attaching assets
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
-          RELEASE_PRERELEASE: ${{ github.event.release.prerelease }}
+          RELEASE_TAG: ${{ needs.validate-release.outputs.release_tag }}
+          EXPECTED_COMMIT: ${{ needs.validate-release.outputs.source_commit }}
+          EXPECTED_PRERELEASE: ${{ needs.validate-release.outputs.prerelease }}
+          EXPECTED_RELEASE_ID: ${{ needs.validate-release.outputs.release_id }}
         run: |
           set -euo pipefail
-          asset_count="$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets | length')"
-          test "$asset_count" = "0"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_COMMIT"
+          release_json="$(gh api --paginate --slurp "repos/${GITHUB_REPOSITORY}/releases" | \
+            jq -ce --arg tag "$RELEASE_TAG" \
+              '[.[][] | select(.tag_name == $tag)] | if length == 1 then .[0] else error("expected exactly one release") end')"
+          test "$(jq -r '.id' <<< "$release_json")" = "$EXPECTED_RELEASE_ID"
+          test "$(jq -r '.tag_name' <<< "$release_json")" = "$RELEASE_TAG"
+          test "$(jq -r '.draft' <<< "$release_json")" = "true"
+          test "$(jq -r '.prerelease' <<< "$release_json")" = "$EXPECTED_PRERELEASE"
+          test "$(jq -r '.assets | length' <<< "$release_json")" = "0"
 
       - name: Download firmware assets
         uses: actions/download-artifact@v4
@@ -162,45 +210,74 @@ jobs:
           pattern: crosstwins-*.bin
           merge-multiple: true
 
-      - name: Verify candidate firmware and prepare manifest
+      - name: Verify firmware and prepare manifest
         env:
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_TAG: ${{ needs.validate-release.outputs.release_tag }}
+          SOURCE_COMMIT: ${{ needs.validate-release.outputs.source_commit }}
         run: |
           set -euo pipefail
-          commit="$(git rev-parse HEAD)"
           version="${RELEASE_TAG#v}"
           manifest="dist/crosstwins-${version}-manifest.json"
-          python scripts/release_assets.py manifest --tag "$RELEASE_TAG" --commit "$commit" --assets-dir dist --output "$manifest"
-          python scripts/release_assets.py verify --tag "$RELEASE_TAG" --commit "$commit" --assets-dir dist --manifest "$manifest"
-          echo "SOURCE_COMMIT=$commit" >> "$GITHUB_ENV"
+          python scripts/release_assets.py manifest --tag "$RELEASE_TAG" --commit "$SOURCE_COMMIT" \
+            --assets-dir dist --output "$manifest"
+          python scripts/release_assets.py verify --tag "$RELEASE_TAG" --commit "$SOURCE_COMMIT" \
+            --assets-dir dist --manifest "$manifest"
 
-      - name: Attach firmware assets and manifest
+      - name: Attach firmware assets and manifest to draft
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_TAG: ${{ needs.validate-release.outputs.release_tag }}
+          RELEASE_ID: ${{ needs.validate-release.outputs.release_id }}
         run: |
           set -euo pipefail
           version="${RELEASE_TAG#v}"
-          gh release upload "$RELEASE_TAG" dist/crosstwins-*.bin "dist/crosstwins-${version}-manifest.json" \
-            --repo "$GITHUB_REPOSITORY"
+          for asset in dist/crosstwins-*.bin "dist/crosstwins-${version}-manifest.json"; do
+            test -f "$asset"
+            name="${asset##*/}"
+            curl --fail-with-body --silent --show-error \
+              -X POST \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              -H "Content-Type: application/octet-stream" \
+              --data-binary "@$asset" \
+              "https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}/assets?name=${name}" \
+              >/dev/null
+          done
 
-      - name: Verify published asset names and hashes
+      - name: Verify uploaded assets before publication
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
-          RELEASE_PRERELEASE: ${{ github.event.release.prerelease }}
+          RELEASE_TAG: ${{ needs.validate-release.outputs.release_tag }}
+          SOURCE_COMMIT: ${{ needs.validate-release.outputs.source_commit }}
+          EXPECTED_PRERELEASE: ${{ needs.validate-release.outputs.prerelease }}
+          EXPECTED_RELEASE_ID: ${{ needs.validate-release.outputs.release_id }}
         run: |
           set -euo pipefail
           version="${RELEASE_TAG#v}"
           mkdir verify
-          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir verify \
-            --pattern 'crosstwins-*.bin' --pattern 'crosstwins-*-manifest.json'
-          python scripts/release_assets.py verify --tag "$RELEASE_TAG" --commit "$SOURCE_COMMIT" \
-            --assets-dir verify --manifest "verify/crosstwins-${version}-manifest.json"
           python scripts/release_assets.py list --tag "$RELEASE_TAG" | sort > expected-assets.txt
           printf '%s\n' "crosstwins-${version}-manifest.json" >> expected-assets.txt
           sort -o expected-assets.txt expected-assets.txt
-          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | sort > published-assets.txt
-          diff -u expected-assets.txt published-assets.txt
-          test "$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isPrerelease --jq '.isPrerelease')" = "$RELEASE_PRERELEASE"
+          release_json="$(gh api --paginate --slurp "repos/${GITHUB_REPOSITORY}/releases" | \
+            jq -ce --arg tag "$RELEASE_TAG" \
+              '[.[][] | select(.tag_name == $tag)] | if length == 1 then .[0] else error("expected exactly one release") end')"
+          test "$(jq -r '.id' <<< "$release_json")" = "$EXPECTED_RELEASE_ID"
+          jq -r '.assets[].name' <<< "$release_json" | sort > uploaded-assets.txt
+          diff -u expected-assets.txt uploaded-assets.txt
+          test "$(jq -r '.draft' <<< "$release_json")" = "true"
+          test "$(jq -r '.prerelease' <<< "$release_json")" = "$EXPECTED_PRERELEASE"
+          test "$(jq -r '[.assets[].state] | all(. == "uploaded")' <<< "$release_json")" = "true"
+
+          jq -r '.assets[] | [.id, .name] | @tsv' <<< "$release_json" |
+            while IFS=$'\t' read -r asset_id asset_name; do
+              curl --fail --silent --show-error --location \
+                -H "Authorization: Bearer $GH_TOKEN" \
+                -H "Accept: application/octet-stream" \
+                "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/assets/${asset_id}" \
+                --output "verify/${asset_name}"
+            done
+          python scripts/release_assets.py verify --tag "$RELEASE_TAG" --commit "$SOURCE_COMMIT" \
+            --assets-dir verify --manifest "verify/crosstwins-${version}-manifest.json"
+          echo "Release tag: $RELEASE_TAG" >> "$GITHUB_STEP_SUMMARY"
+          echo "Source commit: $SOURCE_COMMIT" >> "$GITHUB_STEP_SUMMARY"
           cat "verify/crosstwins-${version}-manifest.json" >> "$GITHUB_STEP_SUMMARY"

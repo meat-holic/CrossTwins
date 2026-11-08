@@ -87,7 +87,8 @@ jobs:
       - name: Build CrossTwins Release Candidate
         run: |
           version="$(sed -n 's/^version = //p' platformio.ini | head -n1)"
-          CROSSPOINT_RELEASE_VERSION="$version" pio run -e ${{ matrix.pio_env }} -j1
+          CROSSPOINT_RELEASE_VERSION="$version" PLATFORMIO_BUILD_FLAGS="-DCROSSTWINS_USE_BUILD_VERSION=1" \
+            pio run -e ${{ matrix.pio_env }} -j1
 
       - name: Name release asset
         run: |

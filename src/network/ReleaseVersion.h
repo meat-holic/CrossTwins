@@ -41,14 +41,19 @@ constexpr bool parse(std::string_view tag, Version& version) {
   if (!parseNumber(text, position, version.minor) || position >= text.size() || text[position++] != '.') return false;
   if (!parseNumber(text, position, version.patch)) return false;
   if (position == text.size()) return true;
-  if (text.substr(position, 3) != "-rc") return false;
-  position += 3;
-  version.isRc = true;
-  if (!parseNumber(text, position, version.rc)) return false;
-  if (position == text.size()) return true;
   constexpr std::string_view REVISION = ".rev.";
-  if (text.substr(position, REVISION.size()) != REVISION) return false;
-  position += REVISION.size();
+  if (text.substr(position, 3) == "-rc") {
+    position += 3;
+    version.isRc = true;
+    if (!parseNumber(text, position, version.rc)) return false;
+    if (position == text.size()) return true;
+    if (text.substr(position, REVISION.size()) != REVISION) return false;
+    position += REVISION.size();
+  } else if (text.substr(position, 5) == "-rev.") {
+    position += 5;
+  } else {
+    return false;
+  }
   version.hasRevision = true;
   if (!parseNumber(text, position, version.revision)) return false;
   return position == text.size();
@@ -59,8 +64,7 @@ constexpr int compare(const Version& left, const Version& right) {
   if (left.minor != right.minor) return left.minor < right.minor ? -1 : 1;
   if (left.patch != right.patch) return left.patch < right.patch ? -1 : 1;
   if (left.isRc != right.isRc) return left.isRc ? -1 : 1;
-  if (!left.isRc) return 0;
-  if (left.rc != right.rc) return left.rc < right.rc ? -1 : 1;
+  if (left.isRc && left.rc != right.rc) return left.rc < right.rc ? -1 : 1;
   if (left.hasRevision != right.hasRevision) return left.hasRevision ? 1 : -1;
   if (left.revision != right.revision) return left.revision < right.revision ? -1 : 1;
   return 0;

@@ -155,8 +155,8 @@ void MinimalTheme::drawHomeButtonMenu(GfxRenderer& renderer, const Rect rect, co
                           home_menu::Appearance::TEXT_CHIPS);
 }
 
-void MinimalTheme::drawHomeButtonHints(GfxRenderer& renderer, const char* btn1, const char* btn2, const char* btn3,
-                                       const char* btn4) const {
+void MinimalTheme::drawButtonHints(GfxRenderer& renderer, const char* btn1, const char* btn2, const char* btn3,
+                                   const char* btn4) const {
   if (gpio.hasTouch()) return;
 
   const Rect content = UITheme::getContentArea(renderer);
@@ -198,6 +198,13 @@ void MinimalTheme::drawHomeButtonHints(GfxRenderer& renderer, const char* btn1, 
     separatorY2 = footer.y + footer.height - 1;
   }
   if (footer.width <= 0 || footer.height <= 0) return;
+
+  // Keep grayscale image planes from overwriting the monochrome hints drawn in the base pass.
+  if (renderer.getRenderMode() != GfxRenderer::BW && !renderer.grayPlanesAreAbsolute()) {
+    renderer.fillRect(footer.x, footer.y, footer.width, footer.height, true);
+    return;
+  }
+
   renderer.drawLine(separatorX1, separatorY1, separatorX2, separatorY2, 1, true);
 
   const char* labels[] = {btn1, btn2, btn3, btn4};

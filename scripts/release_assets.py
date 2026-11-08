@@ -14,10 +14,11 @@ ROOT = Path(__file__).resolve().parents[1]
 POLICY = json.loads((ROOT / "config" / "release_assets.json").read_text(encoding="utf-8"))
 VERSION_RE = re.compile(
     r"v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)"
-    r"(?:-rc(0|[1-9][0-9]*)(?:\.rev\.(0|[1-9][0-9]*))?)?\Z"
+    r"(?:-rc(0|[1-9][0-9]*)(?:\.rev\.(0|[1-9][0-9]*))?|-rev\.(0|[1-9][0-9]*))?\Z"
 )
 MAX_COMPONENT = (1 << 32) - 1
 DEVICES = tuple(dict.fromkeys(entry["device"] for entry in POLICY["boards"]))
+LEGACY_STABLE_RC_TAG = "2.0.0-rc2.rev.2"
 
 
 def normalize_tag(tag: str) -> str:
@@ -27,6 +28,22 @@ def normalize_tag(tag: str) -> str:
     if any(int(component) > MAX_COMPONENT for component in match.groups() if component is not None):
         raise ValueError(f"release version component out of range: {tag!r}")
     return tag[1:] if tag.startswith("v") else tag
+
+
+def validate_release_tag(tag: str, configured_version: str, prerelease: bool) -> str:
+    version = normalize_tag(tag)
+    configured = normalize_tag(configured_version)
+    base_version = version.split("-", 1)[0]
+    configured_base = configured.split("-", 1)[0]
+    is_rc = "-rc" in version
+
+    if prerelease:
+        if version == LEGACY_STABLE_RC_TAG or not is_rc or base_version != configured_base:
+            raise ValueError(f"prerelease tag does not match configured version series: {tag!r}")
+    elif version != configured and version != LEGACY_STABLE_RC_TAG:
+        raise ValueError(f"stable release tag does not match configured version: {tag!r}")
+
+    return version
 
 
 def asset_name(tag: str, device: str) -> str:
@@ -99,6 +116,11 @@ def main() -> int:
     list_parser = subparsers.add_parser("list")
     list_parser.add_argument("--tag", required=True)
 
+    validate_parser = subparsers.add_parser("validate")
+    validate_parser.add_argument("--tag", required=True)
+    validate_parser.add_argument("--configured-version", required=True)
+    validate_parser.add_argument("--prerelease", choices=("true", "false"), required=True)
+
     manifest_parser = subparsers.add_parser("manifest")
     manifest_parser.add_argument("--tag", required=True)
     manifest_parser.add_argument("--commit", required=True)
@@ -117,6 +139,8 @@ def main() -> int:
             print(asset_name(args.tag, args.device))
         elif args.command == "list":
             print("\n".join(expected_names(args.tag)))
+        elif args.command == "validate":
+            print(validate_release_tag(args.tag, args.configured_version, args.prerelease == "true"))
         elif args.command == "manifest":
             result = manifest(args.tag, args.commit, args.assets_dir)
             args.output.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8", newline="\n")

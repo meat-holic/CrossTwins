@@ -111,7 +111,7 @@ Upon turning the device on for the first time, you will be placed on the **[Home
 
 The Home screen is the main entry point to the firmware. From here you can navigate to **[Reading Mode](#4-reading-mode)** with the most recently read book, **[Browse Files](#33-browse-files-screen)**, the **[Library](#34-library-screen)**, **[File Transfer](#35-file-transfer-screen)**, or **[Settings](#36-settings)**.
 
-The **Minimal** home theme shows recent-book details above a text menu. Recent-book details are informational and do not take on the menu's selection highlight. With Minimal selected, open **Settings → Display** to choose left, center, or right alignment and optionally select a BMP from the SD card as a background. The selected alignment applies to both recent-book text and the menu. The image is center-cropped to fill the middle content area; the status area and button-hint area remain outside it. Subscreens retain RoundedRaff's shared headers, version information, list styling, and button hints.
+The **Minimal** home theme shows recent-book details above a text menu. Recent-book details are informational and do not take on the menu's selection highlight. With Minimal selected, open **Settings → Display** to choose left, center, or right alignment and optionally select a BMP from the SD card as a background. The selected alignment applies to both recent-book text and the menu. The image is center-cropped to fill the middle content area; the status area and button-hint area remain outside it. Subscreens retain RoundedRaff's shared headers, version information, list styling, and menus. Any screen that shows physical-button hints uses Minimal's text-only footer, with labels supplied by that screen's existing button mapping.
 
 #### Minimal background image guide
 
@@ -128,7 +128,7 @@ Use an uncompressed BMP matching the visible home content area's aspect ratio fo
 | X3 | Landscape clockwise | (43, 62, 740, 463) | 740 × 463 |
 | X3 | Landscape counter-clockwise | (9, 62, 740, 463) | 740 × 463 |
 
-These logical-pixel coordinates use the current X3/X4 bezel insets and the 40-pixel physical-button hint band. The status area ends at Y=62. Minimal's home-only text hints use a divider at Y=757 on X4 and Y=749 on X3 in portrait, Y=42 when inverted, and X=42 clockwise or X=757 (X4) / X=749 (X3) counter-clockwise in landscape. In landscape, the button-hint area is a side band: the image starts at X=43 clockwise and X=9 counter-clockwise. Home hints remain text-only; sub-screens use RoundedRaff's shared outlined hint groups. The renderer clips the BMP to the listed background rectangle.
+These logical-pixel coordinates use the current X3/X4 bezel insets and the 40-pixel physical-button hint band. The status area ends at Y=62. Minimal's text hints use a divider at Y=757 on X4 and Y=749 on X3 in portrait, Y=42 when inverted, and X=42 clockwise or X=757 (X4) / X=749 (X3) counter-clockwise in landscape. In landscape, the button-hint area is a side band: the image starts at X=43 clockwise and X=9 counter-clockwise. The same text-only footer style is used on the home and sub-screens; each screen supplies its own mapped labels. The renderer clips the BMP to the listed background rectangle.
 
 ### 3.2 Reading Mode
 
