@@ -2,7 +2,9 @@
 
 #include <GfxRenderer.h>
 #include <HalClock.h>
+#include <HalMemory.h>
 #include <I18n.h>
+#include <StatusBarMemoryTitle.h>
 
 #include <cstring>
 #include <memory>
@@ -53,8 +55,8 @@ constexpr int PROGRESS_BAR_THICKNESS_ITEMS = 3;
 const StrId progressBarThicknessNames[PROGRESS_BAR_THICKNESS_ITEMS] = {
     StrId::STR_PROGRESS_BAR_THIN, StrId::STR_PROGRESS_BAR_MEDIUM, StrId::STR_PROGRESS_BAR_THICK};
 
-constexpr int TITLE_ITEMS = 3;
-const StrId titleNames[TITLE_ITEMS] = {StrId::STR_BOOK, StrId::STR_CHAPTER, StrId::STR_HIDE};
+constexpr int TITLE_ITEMS = CrossPointSettings::STATUS_BAR_TITLE_COUNT;
+const StrId titleNames[TITLE_ITEMS] = {StrId::STR_BOOK, StrId::STR_CHAPTER, StrId::STR_HIDE, StrId::STR_MEMORY_MONITOR};
 
 constexpr int XTC_STATUS_BAR_ITEMS = 3;
 const StrId xtcStatusBarNames[XTC_STATUS_BAR_ITEMS] = {StrId::STR_HIDE, StrId::STR_BOTTOM, StrId::STR_TOP};
@@ -234,11 +236,18 @@ void StatusBarSettingsActivity::render(RenderLock&&) {
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_TOGGLE), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
-  std::string title;
+  const char* title = "";
+  char memoryTitle[status_bar_memory::kTitleBufferSize];
   if (SETTINGS.statusBarTitle == CrossPointSettings::STATUS_BAR_TITLE::BOOK_TITLE) {
     title = tr(STR_EXAMPLE_BOOK);
   } else if (SETTINGS.statusBarTitle == CrossPointSettings::STATUS_BAR_TITLE::CHAPTER_TITLE) {
     title = tr(STR_EXAMPLE_CHAPTER);
+  } else if (SETTINGS.statusBarTitle == CrossPointSettings::STATUS_BAR_TITLE::MEMORY_WATCH) {
+    const auto heap = HalMemory::getByteAddressableHeap();
+    title = status_bar_memory::formatTitle(memoryTitle, sizeof(memoryTitle), heap.freeBytes, heap.largestBlockBytes,
+                                           tr(STR_MEMORY_WATCH_FORMAT), tr(STR_MEMORY_WATCH_UNAVAILABLE))
+                ? memoryTitle
+                : tr(STR_MEMORY_WATCH_UNAVAILABLE);
   }
 
   // Anchor the preview as a footer directly above the button hints.

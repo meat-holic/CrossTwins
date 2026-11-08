@@ -48,7 +48,10 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
     PROGRESS_BAR_THICK = 2,
     STATUS_BAR_PROGRESS_BAR_THICKNESS_COUNT
   };
-  enum STATUS_BAR_TITLE { BOOK_TITLE = 0, CHAPTER_TITLE = 1, HIDE_TITLE = 2, STATUS_BAR_TITLE_COUNT };
+  // Persisted values 0..2 predate the memory monitor and remain unchanged.
+  enum STATUS_BAR_TITLE { BOOK_TITLE = 0, CHAPTER_TITLE = 1, HIDE_TITLE = 2, MEMORY_WATCH = 3, STATUS_BAR_TITLE_COUNT };
+  static_assert(BOOK_TITLE == 0 && CHAPTER_TITLE == 1 && HIDE_TITLE == 2 && MEMORY_WATCH == 3,
+                "status bar title values are persisted in settings.json");
   enum XTC_STATUS_BAR_MODE {
     XTC_STATUS_BAR_HIDE = 0,
     XTC_STATUS_BAR_BOTTOM = 1,

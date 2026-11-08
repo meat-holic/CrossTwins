@@ -13,6 +13,11 @@ class HalMemory {
     size_t largestBlockBytes;
   };
 
+  struct ByteAddressableHeapStats {
+    size_t freeBytes;
+    size_t largestBlockBytes;
+  };
+
   struct PsramDeleter {
     void operator()(uint8_t* buffer) const;
   };
@@ -24,4 +29,5 @@ class HalMemory {
   static HeapStats getDefaultHeap();
   static HeapStats getInternalHeap();
   static HeapStats getPsramHeap();
+  static ByteAddressableHeapStats getByteAddressableHeap();
 };

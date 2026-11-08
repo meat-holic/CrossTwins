@@ -65,7 +65,7 @@ Check [our Devices page](https://crosspointreader.com/devices) for the full list
   - OPDS browser with saved servers (up to 8), search, pagination, and direct download
   - OTA update checks and installs from GitHub releases
 
-- **Customization**: night mode, multiple themes (Classic, Lyra, Lyra Extended, RoundedRaff), sleep screen modes including transparent overlays, front/side button remapping, status bar controls, power-button behavior, refresh cadence, and more.
+- **Customization**: night mode, multiple themes (Classic, Lyra, Lyra Extended, RoundedRaff), sleep screen modes including transparent overlays, front/side button remapping, status bar controls including the Memory Monitor's free heap/largest-block diagnostics, power-button behavior, refresh cadence, and more.
 
 - **Localization**: 34 UI languages and counting, including CJK font fallback and RTL support.
 

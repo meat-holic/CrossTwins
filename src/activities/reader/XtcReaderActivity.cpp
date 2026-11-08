@@ -2,9 +2,11 @@
 
 #include <FsHelpers.h>
 #include <GfxRenderer.h>
+#include <HalMemory.h>
 #include <HalStorage.h>
 #include <I18n.h>
 #include <Memory.h>
+#include <StatusBarMemoryTitle.h>
 
 #include <algorithm>
 
@@ -138,7 +140,20 @@ void XtcReaderActivity::renderStatusBarOverlay(GfxRenderer& renderer, const Stat
   const int displayPage = static_cast<int>(currentPage) + 1;
   const float progress = pageCount > 0 ? (static_cast<float>(displayPage) * 100.0f) / pageCount : 0.0f;
   const auto pageInfo = getStatusBarInfo();
-  GUI.drawStatusBar(renderer, progress, pageInfo.currentPage, pageInfo.pageCount, pageInfo.title, paddingBottom);
+  if (sb.titleMode == CrossPointSettings::STATUS_BAR_TITLE::MEMORY_WATCH) {
+    char memoryTitle[status_bar_memory::kTitleBufferSize];
+    const auto heap = HalMemory::getByteAddressableHeap();
+    if (!status_bar_memory::formatTitle(memoryTitle, sizeof(memoryTitle), heap.freeBytes, heap.largestBlockBytes,
+                                        tr(STR_MEMORY_WATCH_FORMAT), tr(STR_MEMORY_WATCH_UNAVAILABLE))) {
+      GUI.drawStatusBar(renderer, progress, pageInfo.currentPage, pageInfo.pageCount, tr(STR_MEMORY_WATCH_UNAVAILABLE),
+                        paddingBottom);
+      return;
+    }
+    GUI.drawStatusBar(renderer, progress, pageInfo.currentPage, pageInfo.pageCount, memoryTitle, paddingBottom);
+    return;
+  }
+  GUI.drawStatusBar(renderer, progress, pageInfo.currentPage, pageInfo.pageCount, pageInfo.title.c_str(),
+                    paddingBottom);
 }
 
 void XtcReaderActivity::renderPage() {

@@ -17,6 +17,11 @@ HalMemory::HeapStats HalMemory::getInternalHeap() { return readHeapStats(MALLOC_
 
 HalMemory::HeapStats HalMemory::getPsramHeap() { return readHeapStats(MALLOC_CAP_SPIRAM); }
 
+HalMemory::ByteAddressableHeapStats HalMemory::getByteAddressableHeap() {
+  constexpr uint32_t capabilities = MALLOC_CAP_8BIT;
+  return {heap_caps_get_free_size(capabilities), heap_caps_get_largest_free_block(capabilities)};
+}
+
 void HalMemory::PsramDeleter::operator()(uint8_t* buffer) const { heap_caps_free(buffer); }
 
 HalMemory::PsramBuffer HalMemory::allocatePsram(size_t bytes) {

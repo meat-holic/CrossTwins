@@ -9,10 +9,12 @@
 #include <HalDisplay.h>
 #include <HalFrontlight.h>
 #include <HalGPIO.h>
+#include <HalMemory.h>
 #include <HalStorage.h>
 #include <I18n.h>
 #include <Logging.h>
 #include <Memory.h>
+#include <StatusBarMemoryTitle.h>
 #include <TrustedTime.h>
 #include <WiFi.h>
 #include <esp_system.h>
@@ -2466,8 +2468,26 @@ void EpubReaderActivity::renderStatusBar() const {
     title = epub ? epub->getTitle() : "";
   }
 
-  GUI.drawStatusBar(renderer, bookProgress, currentPage, pageCount, title, 0, textYOffset, true, currentPageBookmarked,
-                    section ? section->isBuilding() : false);
+  const auto drawStatusBar = [this, bookProgress, currentPage, pageCount, textYOffset](const char* statusTitle) {
+    GUI.drawStatusBar(renderer, bookProgress, currentPage, pageCount, statusTitle, 0, textYOffset, true,
+                      currentPageBookmarked, section ? section->isBuilding() : false);
+  };
+
+  // Transient Bluetooth and auto-turn notices retain their existing priority.
+  if (sb.titleMode == CrossPointSettings::STATUS_BAR_TITLE::MEMORY_WATCH && note == bleturner::LinkNote::None &&
+      !automaticPageTurnActive) {
+    char memoryTitle[status_bar_memory::kTitleBufferSize];
+    const auto heap = HalMemory::getByteAddressableHeap();
+    if (!status_bar_memory::formatTitle(memoryTitle, sizeof(memoryTitle), heap.freeBytes, heap.largestBlockBytes,
+                                        tr(STR_MEMORY_WATCH_FORMAT), tr(STR_MEMORY_WATCH_UNAVAILABLE))) {
+      drawStatusBar(tr(STR_MEMORY_WATCH_UNAVAILABLE));
+      return;
+    }
+    drawStatusBar(memoryTitle);
+    return;
+  }
+
+  drawStatusBar(title.c_str());
 }
 
 // ---------------------------------------------------------------------------
