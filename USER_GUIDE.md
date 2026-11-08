@@ -68,7 +68,7 @@ Button layout can be customized in the **[Controls Settings](#363-controls)**.
 
 ### Taking a Screenshot
 
-When the Power button and the lower side button (Side Down) are pressed at the same time, it will take a screenshot and save it in the folder `screenshots/`.
+When the Power button and the lower side button (Side Down) are pressed at the same time, it will take a screenshot and save it in the folder `screenshots/`. While reading, screenshots remain in a book-specific subfolder. Filenames use sequential numbers such as `screenshot_00001.bmp`. The device scans the active destination folder on first use and whenever the destination changes, then keeps the next number in RAM while that folder remains active. Numbering starts after the highest matching screenshot number; missing lower numbers are not reused while a higher-numbered file remains. The number expands beyond five digits when needed. Existing timestamp- and book-title-based files are left unchanged.
 
 Alternatively, while reading a book, press the **Confirm** button to open the reader menu and select **Take screenshot**.
 
@@ -729,7 +729,7 @@ Available options include:
 - **Reading Orientation** – Cycle through screen orientations without leaving the reader.
 - **Auto Turn (Pages Per Minute)** – Cycle through automatic page turn speed options for hands-free reading.
 - **Go to %** – Jump to a specific position in the book by percentage.
-- **Take screenshot** – Save a screenshot of the current page to the `screenshots/` folder.
+- **Take screenshot** – Save a screenshot of the current page to the `screenshots/` folder, in this book's subfolder.
 - **Show page as QR** – Display a QR code encoding the current reading position.
 - **Go Home** – Close the book and return to the Home screen.
 - **Sync Progress** – Push or pull reading progress with a KOReader sync server (see [KOReader Sync Quick Setup](#367-koreader-sync-quick-setup)). This entry appears when sync credentials are saved or an enabled plugin subscribes to device events. Without sync credentials, it connects to Wi-Fi to send queued plugin events.

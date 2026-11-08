@@ -4,6 +4,7 @@
 #include <common/FsApiConstants.h>  // for oflag_t
 #include <freertos/semphr.h>
 
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <vector>
@@ -111,6 +112,7 @@ class HalFile : public Print {
   bool truncate(uint64_t length);
   int available() const;
   size_t position() const;
+  uint8_t getError() const;
   int read(void* buf, size_t count);
   int read();  // read a single byte
   size_t write(const uint8_t* buf, size_t count) override;

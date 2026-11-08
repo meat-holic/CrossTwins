@@ -143,6 +143,7 @@ add_subdirectory(plugin_manifest_classification)
 add_subdirectory(plugin_picker_layout)
 add_subdirectory(protected_paths)
 add_subdirectory(upload_staging_path)
+add_subdirectory(screenshot_filename)
 
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 add_test(NAME dos_home_layout COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_dos_home_layout.py)
