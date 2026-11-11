@@ -325,7 +325,7 @@ Settings are grouped into **System**, **Display**, **Reader**, **Controls**, **L
   - **Suppress**: images are left out.
   - **Black & White**: images drawn as a black-and-white dot pattern. Pages with images turn like text pages, without the extra refresh.
 
-- **Focus Reading**: Bolds the first part of each word to create visual fixation points, similar to Bionic Reading. This can help improve reading speed and focus; options are "ON" or "OFF" (default).
+- **Focus Reading**: Bolds the first part of eligible English words or Korean eojeol. Turn it ON or OFF, and choose the emphasis amount under **Focus Reading Intensity** in Text Settings or the reader Text panel.
 
 #### 3.6.3 Controls
 

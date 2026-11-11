@@ -130,8 +130,6 @@ void MinimalTheme::drawHomeRecentBooks(GfxRenderer& renderer, const Rect rect,
   const auto alignment = menuAlignment();
   const int blockX = home_menu::alignedRowX(rect.x, rect.width, kRecentSidePadding, blockWidth, alignment);
   const int blockY = rect.y + (rect.height - blockHeight) / 2;
-  renderer.fillRect(blockX, blockY, blockWidth, blockHeight, false);
-
   int textY = blockY + kRecentBlockPaddingY;
   const auto previousClip = renderer.getClipRect();
   renderer.setClipRect(rect.x, rect.y, rect.width, rect.height);

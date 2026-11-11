@@ -110,9 +110,9 @@ class ReleaseAssetPolicyTests(unittest.TestCase):
         platformio = (ROOT / "platformio.ini").read_text(encoding="utf-8")
         self.assertEqual(platformio.count("${sysenv.CROSSPOINT_RELEASE_VERSION}"), 8)
         configured_version = next(line for line in platformio.splitlines() if line.startswith("version = ")).split("=", 1)[1].strip()
-        self.assertEqual(configured_version, "2.0.0-rev.1")
+        self.assertEqual(configured_version, "2.0.0-rev.2")
         self.assertEqual(
-            release_assets.validate_release_tag("v2.0.0-rev.1", configured_version, False), configured_version
+            release_assets.validate_release_tag("v2.0.0-rev.2", configured_version, False), configured_version
         )
         header = (ROOT / "src" / "network" / "ReleaseAssetPolicy.h").read_text(encoding="utf-8")
         self.assertIn(f'PREFIX = "{policy["prefix"]}"', header)
