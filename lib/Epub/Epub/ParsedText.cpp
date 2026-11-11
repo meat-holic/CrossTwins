@@ -67,11 +67,11 @@ uint32_t lastCodepoint(const std::string_view word) {
 
 bool containsSoftHyphen(const std::string_view word) { return word.find(SOFT_HYPHEN_UTF8) != std::string_view::npos; }
 
-bool containsCjkBreakableCodepoint(const std::string& text) {
+bool containsCjkBreakableCodepoint(const std::string& text, const bool permitHangul) {
   const auto* ptr = reinterpret_cast<const unsigned char*>(text.c_str());
   while (*ptr) {
     const uint32_t cp = utf8NextCodepoint(&ptr);
-    if (utf8IsCjkBreakable(cp)) {
+    if (utf8IsCjkBreakable(cp) && !(permitHangul && utf8IsHangul(cp))) {
       return true;
     }
   }
@@ -87,6 +87,15 @@ uint32_t countCodepoints(const std::string_view text) {
     count++;
   }
   return count;
+}
+
+bool containsHangul(const std::string_view text) {
+  const auto* ptr = reinterpret_cast<const unsigned char*>(text.data());
+  const auto* const end = ptr + text.size();
+  while (ptr < end) {
+    if (utf8IsHangul(utf8NextCodepoint(&ptr))) return true;
+  }
+  return false;
 }
 
 // Line-end split points inside a Hangul word, using the CJK boundary rules (no hyphen is drawn).
@@ -440,7 +449,7 @@ bool ParsedText::storeWord(const std::string_view text, WordStore::StoredWord& o
 
 void ParsedText::addWord(std::string word, const EpdFontFamily::Style fontStyle, const bool underline,
                          const bool attachToPrevious, const uint32_t visibleTextOffset, const uint8_t linkId,
-                         const uint8_t sizeSlot, const bool noSpaceBefore) {
+                         const uint8_t sizeSlot, const bool noSpaceBefore, const bool allowFocus) {
   if (word.empty()) return;
 
   // The device fonts carry no combining-mark positioning, so EPUB text stored in NFD
@@ -567,7 +576,9 @@ void ParsedText::addWord(std::string word, const EpdFontFamily::Style fontStyle,
     return;
   }
 
-  if (containsCjkBreakableCodepoint(word)) {
+  const bool focusEligible = focusReadingEnabled && allowFocus && !attachToPrevious && !noSpaceBefore &&
+                             baseStyle == EpdFontFamily::REGULAR && sizeSlot == 0;
+  if (containsCjkBreakableCodepoint(word, focusEligible)) {
     pushToken(word, effectiveAttachToPrevious, effectiveNoSpaceBefore, /*focusBoundary=*/0, visibleTextOffset);
     if (wordStartsRtl) {
       hasRtlWord = true;
@@ -575,8 +586,8 @@ void ParsedText::addWord(std::string word, const EpdFontFamily::Style fontStyle,
     return;
   }
 
-  // Already-bold text should stay fully bold; focus splitting would make its suffix regular later.
-  if (!this->focusReadingEnabled || (baseStyle & EpdFontFamily::BOLD) != 0) {
+  // Preserve author styling and incomplete inline words without adding automatic emphasis.
+  if (!focusEligible) {
     if (auto breakOffsets = explicitHyphenBreakByteOffsets(word, effectiveAttachToPrevious); !breakOffsets.empty()) {
       ensureTokenCapacity(breakOffsets.size() + 1);
       bool firstToken = true;
@@ -610,8 +621,16 @@ void ParsedText::addWord(std::string word, const EpdFontFamily::Style fontStyle,
 
   // --- FOCUS READING LOGIC BELOW ---
 
-  // Worst case: a segment boundary on each byte (highly punctuated UTF-8 text).
-  ensureTokenCapacity(word.length());
+  // Reserve actual segments, so three-byte Hangul does not inflate parallel arrays.
+  size_t segmentCount = 0;
+  bool previousWord = false;
+  const auto* scan = reinterpret_cast<const unsigned char*>(word.c_str());
+  while (*scan) {
+    const bool currentWord = isWordCharacter(utf8NextCodepoint(&scan));
+    if (segmentCount == 0 || currentWord != previousWord) ++segmentCount;
+    previousWord = currentWord;
+  }
+  ensureTokenCapacity(segmentCount);
 
   // Lambda helper to process and push individual sub-segments of the string
   // Use std::string_view to avoid heap allocations when slicing
@@ -638,9 +657,13 @@ void ParsedText::addWord(std::string word, const EpdFontFamily::Style fontStyle,
         charCount++;
       }
 
-      // Target 45% for 1-bold at 4 chars and 3-bold at 7 chars with floor truncation
-      constexpr size_t FOCUS_READING_PERCENT = 45;
-      size_t targetBoldChars = (charCount * FOCUS_READING_PERCENT) / 100;
+      // Count Unicode codepoints, not UTF-8 bytes. Keep the legacy English 45% floor at the
+      // default stage; Korean words use the new rounded-up ratio at every strength.
+      const size_t percent = 20 + 5 * std::min<uint8_t>(bionicReadingStage, 5);
+      const bool koreanWord = containsHangul(segment);
+      size_t targetBoldChars = !koreanWord && bionicReadingStage >= 5
+                                   ? (charCount * 45) / 100
+                                   : (charCount * percent + 99) / 100;
       targetBoldChars = std::clamp<size_t>(targetBoldChars, 1, 9);
 
       if (targetBoldChars >= charCount) {
@@ -819,6 +842,9 @@ void ParsedText::layoutAndExtractLines(const GfxRenderer& renderer, const int fo
     uint8_t styleMask = 0;
     for (auto s : wordStyles) {
       styleMask |= static_cast<uint8_t>(1u << (static_cast<uint8_t>(s) & 0x03));
+    }
+    if (std::any_of(wordFocusBoundary.begin(), wordFocusBoundary.end(), [](uint8_t b) { return b != 0; })) {
+      styleMask |= 0x02;
     }
     if (styleMask == 0) styleMask = 0x01;  // defensive: regular only
     const bool includeSmallCaps = std::any_of(wordSizeSlots.begin(), wordSizeSlots.end(), [](const uint8_t slot) {

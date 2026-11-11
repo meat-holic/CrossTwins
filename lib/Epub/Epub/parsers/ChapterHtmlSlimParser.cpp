@@ -685,7 +685,7 @@ void ChapterHtmlSlimParser::setCurrentPageVisibleOffset(const uint32_t offset) {
 }
 
 // flush the contents of partWordBuffer to currentTextBlock
-void ChapterHtmlSlimParser::flushPartWordBuffer() {
+void ChapterHtmlSlimParser::flushPartWordBuffer(const bool completeWord) {
   // Block creation failed (OOM): drop the buffered text; parseStep() is about
   // to fail the build via layoutOom.
   if (!currentTextBlock) {
@@ -748,7 +748,7 @@ void ChapterHtmlSlimParser::flushPartWordBuffer() {
           ? currentTextBlock->sizeSlotFor(std::clamp(inlineScale, 0.5f, 3.0f))
           : 0;
   currentTextBlock->addWord(partWordBuffer, fontStyle, false, nextWordContinues, partWordVisibleOffset, linkId,
-                            sizeSlot, effectivePreserveWhitespace);
+                            sizeSlot, effectivePreserveWhitespace, completeWord && !inRuby && !nextWordContinues);
   if (insideTableCell && !tableRowStacked) {
     tableRowTextBytes += wordBytes;
     size_t rowWords = currentTextBlock->size();
@@ -813,13 +813,13 @@ void ChapterHtmlSlimParser::startNewTextBlock(const BlockStyle& blockStyle, cons
   if (stopRequested) return;
   dropCap.firstLetterPending = false;
   inlineSize = InlineSizeState{};
-  currentTextBlock =
-      makeUniqueNoThrow<ParsedText>(hyphenationEnabled, focusReadingEnabled, blockStyle, paragraphIndentSpaces);
+  currentTextBlock = makeUniqueNoThrow<ParsedText>(hyphenationEnabled, focusReadingEnabled, blockStyle,
+                                                   paragraphIndentSpaces, bionicReadingStage);
   if (!currentTextBlock) {
     // Evict rebuildable caches and retry once before failing the build.
     freeink::MemoryManager::instance().ensureFree(4 * 1024);
-    currentTextBlock =
-        makeUniqueNoThrow<ParsedText>(hyphenationEnabled, focusReadingEnabled, blockStyle, paragraphIndentSpaces);
+    currentTextBlock = makeUniqueNoThrow<ParsedText>(hyphenationEnabled, focusReadingEnabled, blockStyle,
+                                                     paragraphIndentSpaces, bionicReadingStage);
   }
   if (!currentTextBlock) {
     LOG_ERR("EHP", "OOM: ParsedText");
@@ -832,7 +832,7 @@ void ChapterHtmlSlimParser::startNewTextBlock(const BlockStyle& blockStyle, cons
 void ChapterHtmlSlimParser::emitHorizontalRule(const BlockStyle& blockStyle) {
   if (stopRequested) return;
   if (partWordBufferIndex > 0) {
-    flushPartWordBuffer();
+    flushPartWordBuffer(true);
   }
 
   if (currentTextBlock) {
@@ -1610,8 +1610,9 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
       tableCellBlockStyle.isRtl = cssStyle.direction == CssTextDirection::Rtl;
     }
 
-    self->currentTextBlock = makeUniqueNoThrow<ParsedText>(self->hyphenationEnabled, self->focusReadingEnabled,
-                                                           tableCellBlockStyle, self->paragraphIndentSpaces);
+    self->currentTextBlock =
+        makeUniqueNoThrow<ParsedText>(self->hyphenationEnabled, self->focusReadingEnabled, tableCellBlockStyle,
+                                      self->paragraphIndentSpaces, self->bionicReadingStage);
     if (!self->currentTextBlock) {
       LOG_ERR("EHP", "OOM: table cell");
       self->skipUntilDepth = self->depth;
@@ -2088,7 +2089,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
     // Text running straight into a block ("text<h3>…") is still in the part-word
     // buffer; flush it into the block it belongs to before that block is replaced.
     if (self->partWordBufferIndex > 0) {
-      self->flushPartWordBuffer();
+      self->flushPartWordBuffer(true);
     }
     self->currentCssStyle = cssStyle;
     auto headerBlockStyle = BlockStyle::fromCssStyle(cssStyle, emSize, CssTextAlign::Center, self->viewportWidth);
@@ -2111,13 +2112,13 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
     if (strcmp(name, "br") == 0) {
       if (self->partWordBufferIndex > 0) {
         // flush word preceding <br/> to currentTextBlock before calling startNewTextBlock
-        self->flushPartWordBuffer();
+        self->flushPartWordBuffer(true);
       }
       self->breakTextLine(self->blockStyleStack.back().withoutTop().withoutBottom());
     } else {
       // Flush pending text before the new block, as the header and <br/> branches do.
       if (self->partWordBufferIndex > 0) {
-        self->flushPartWordBuffer();
+        self->flushPartWordBuffer(true);
       }
       self->currentCssStyle = cssStyle;
       auto blockStyle = userAlignmentBlockStyle;
@@ -2354,8 +2355,9 @@ void XMLCALL ChapterHtmlSlimParser::characterData(void* userData, const XML_Char
   if (!self->currentTextBlock) {
     const BlockStyle flowStyle =
         self->blockStyleStack.empty() ? BlockStyle() : self->blockStyleStack.back().withoutBottom();
-    self->currentTextBlock = makeUniqueNoThrow<ParsedText>(self->hyphenationEnabled, self->focusReadingEnabled,
-                                                           flowStyle, self->paragraphIndentSpaces);
+    self->currentTextBlock =
+        makeUniqueNoThrow<ParsedText>(self->hyphenationEnabled, self->focusReadingEnabled, flowStyle,
+                                      self->paragraphIndentSpaces, self->bionicReadingStage);
     if (!self->currentTextBlock) {
       LOG_ERR("EHP", "OOM: text block for character data");
       return;
@@ -2442,9 +2444,9 @@ void XMLCALL ChapterHtmlSlimParser::characterData(void* userData, const XML_Char
     }
 
     if (isWhitespace(s[i])) {
-      // Currently looking at whitespace, if there's anything in the partWordBuffer, flush it
+      // A real whitespace boundary completes the original word.
       if (self->partWordBufferIndex > 0) {
-        self->flushPartWordBuffer();
+        self->flushPartWordBuffer(true);
       }
       // Whitespace is a real word boundary — reset continuation state
       self->nextWordContinues = false;
@@ -2684,7 +2686,7 @@ void XMLCALL ChapterHtmlSlimParser::endElement(void* userData, const XML_Char* n
                              matches(name, IMAGE_TAGS, std::size(IMAGE_TAGS)) || self->depth == 1;
 
     if (shouldFlush) {
-      self->flushPartWordBuffer();
+      self->flushPartWordBuffer(!isInlineTag);
       // If closing an inline element, the next word fragment continues the same visual word
       if (isInlineTag) {
         self->nextWordContinues = true;
@@ -2756,8 +2758,9 @@ void XMLCALL ChapterHtmlSlimParser::endElement(void* userData, const XML_Char* n
 
     const BlockStyle flowStyle =
         self->blockStyleStack.empty() ? BlockStyle() : self->blockStyleStack.back().withoutBottom();
-    self->currentTextBlock = makeUniqueNoThrow<ParsedText>(self->hyphenationEnabled, self->focusReadingEnabled,
-                                                           flowStyle, self->paragraphIndentSpaces);
+    self->currentTextBlock =
+        makeUniqueNoThrow<ParsedText>(self->hyphenationEnabled, self->focusReadingEnabled, flowStyle,
+                                      self->paragraphIndentSpaces, self->bionicReadingStage);
     if (!self->currentTextBlock) {
       LOG_ERR("EHP", "OOM: text block after table");
     }

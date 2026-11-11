@@ -24,6 +24,7 @@ struct PreviewKey {
   int8_t characterSpacing = 0;
   uint8_t wordSpacingPercent = 100;
   bool focusReading = false;
+  uint8_t bionicReadingStage = 5;
   bool hyphenation = false;
   bool operator==(const PreviewKey&) const = default;
 };

@@ -314,3 +314,17 @@ TEST(SelectionGeometry, KeepsCursorClearOfHintsOnEitherAxis) {
   EXPECT_EQ(selectionGeometry::keepVisible(735, 20, 40, 700), -15);
   EXPECT_EQ(selectionGeometry::keepVisible(100, 20, 40, 700), 0);
 }
+
+TEST(ClippingHighlight, BionicStrengthInvalidatesActiveLayoutOnly) {
+  ReaderRenderSpec spec;
+  const auto off = readerRenderSpecSignature(spec);
+  spec.bionicReadingStage = 0;
+  EXPECT_EQ(readerRenderSpecSignature(spec), off);
+  spec.focusReadingEnabled = true;
+  const auto low = readerRenderSpecSignature(spec);
+  EXPECT_NE(low, off);
+  for (uint8_t stage = 1; stage < 6; ++stage) {
+    spec.bionicReadingStage = stage;
+    EXPECT_NE(readerRenderSpecSignature(spec), low);
+  }
+}

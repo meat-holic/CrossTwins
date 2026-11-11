@@ -1,5 +1,8 @@
+find_package(EXPAT REQUIRED)
+
 add_executable(ChapterHtmlSlimParserTest
   ChapterHtmlSlimParserTest.cpp
+  ${REPO_ROOT}/lib/Txt/TxtToHtml.cpp
   ParserLinkStubs.cpp
   DictionaryHtmlPagesTest.cpp
   ${REPO_ROOT}/src/util/DictHtmlPages.cpp
@@ -38,7 +41,7 @@ target_include_directories(ChapterHtmlSlimParserTest PRIVATE
 target_link_libraries(ChapterHtmlSlimParserTest PRIVATE
   crosspoint_test_common
   GTest::gtest_main
-  expat
+  EXPAT::EXPAT
 )
 
 gtest_discover_tests(ChapterHtmlSlimParserTest)

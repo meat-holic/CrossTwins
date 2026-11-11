@@ -4,6 +4,9 @@
 #include <string_view>
 
 namespace FsHelpers {
+inline std::string getFileNameWithoutExtension(std::string_view name) {
+  return std::string(name.substr(0, name.rfind('.')));
+}
 inline std::string decodeUriEscapes(const std::string& path) { return path; }
 inline std::string normalisePath(const std::string& path) { return path; }
 inline bool hasTxtExtension(std::string_view name) { return name.ends_with(".txt"); }

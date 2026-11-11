@@ -2495,8 +2495,10 @@ void EpubReaderActivity::renderStatusBar() const {
 // ---------------------------------------------------------------------------
 
 namespace {
-constexpr StrId kTextRowNames[] = {StrId::STR_FONT, StrId::STR_FONT_SIZE, StrId::STR_LINE_SPACING,
-                                   StrId::STR_PARA_ALIGNMENT, StrId::STR_FOCUS_READING};
+constexpr StrId kTextRowNames[] = {StrId::STR_FONT,           StrId::STR_FONT_SIZE,     StrId::STR_LINE_SPACING,
+                                   StrId::STR_PARA_ALIGNMENT, StrId::STR_FOCUS_READING, StrId::STR_BIONIC_STRENGTH};
+constexpr StrId kBionicIds[] = {StrId::STR_BIONIC_0,  StrId::STR_BIONIC_20, StrId::STR_BIONIC_40,
+                                StrId::STR_BIONIC_60, StrId::STR_BIONIC_80, StrId::STR_BIONIC_100};
 constexpr StrId kAlignIds[] = {StrId::STR_JUSTIFY, StrId::STR_ALIGN_LEFT, StrId::STR_CENTER, StrId::STR_ALIGN_RIGHT,
                                StrId::STR_BOOK_S_STYLE};
 constexpr int kTextRowCount = static_cast<int>(std::size(kTextRowNames));
@@ -2523,6 +2525,7 @@ std::string EpubReaderActivity::textRowName(int row) const {
 }
 
 std::string EpubReaderActivity::textRowValue(int row) const {
+  if (row == 5) return I18N.get(kBionicIds[SETTINGS.bionicReadingStage % 6]);
   static constexpr StrId kFamily[] = {StrId::STR_PRETENDARD};
   switch (row) {
     case 0:
@@ -2551,6 +2554,13 @@ void EpubReaderActivity::applyTextSettingLive() {
 // selection applies immediately to the page under the sheet.
 void EpubReaderActivity::showTextRowPopup(const int row) {
   switch (row) {
+    case 5:
+      overlayPopup.show(StrId::STR_BIONIC_STRENGTH, kBionicIds, 6, SETTINGS.bionicReadingStage, [this](int idx) {
+        if (idx < 0 || idx >= 6) return;
+        SETTINGS.bionicReadingStage = static_cast<uint8_t>(idx);
+        applyTextSettingLive();
+      });
+      break;
     case 1: {
       // The point sizes the active family actually ships.
       const auto sizes = readerFontPointSizes(&sdFontSystem.registry(), SETTINGS.sdFontFamilyName);

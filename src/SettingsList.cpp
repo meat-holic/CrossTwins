@@ -102,6 +102,11 @@ void forEachBaseSetting(SettingVisitor visit, void* context) {
   emit(SettingInfo::Toggle(StrId::STR_FOCUS_READING, &CrossPointSettings::focusReadingEnabled, "focusReadingEnabled",
                            StrId::STR_CAT_READER)
            .withTextSettings());
+  emit(SettingInfo::Enum(StrId::STR_BIONIC_STRENGTH, &CrossPointSettings::bionicReadingStage,
+                         {StrId::STR_BIONIC_0, StrId::STR_BIONIC_20, StrId::STR_BIONIC_40, StrId::STR_BIONIC_60,
+                          StrId::STR_BIONIC_80, StrId::STR_BIONIC_100},
+                         "bionicReadingStage", StrId::STR_CAT_READER)
+           .withTextSettings());
   emit(SettingInfo::Toggle(StrId::STR_HYPHENATION, &CrossPointSettings::hyphenationEnabled, "hyphenationEnabled",
                            StrId::STR_CAT_READER)
            .withTextSettings());

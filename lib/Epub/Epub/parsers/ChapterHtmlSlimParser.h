@@ -59,6 +59,7 @@ class ChapterHtmlSlimParser {
   uint16_t viewportHeight;
   bool hyphenationEnabled;
   bool focusReadingEnabled;
+  uint8_t bionicReadingStage = 5;
   const CssParser* cssParser;
   bool embeddedStyle;
   uint8_t imageRendering;
@@ -263,7 +264,7 @@ class ChapterHtmlSlimParser {
   void planTableColumns(const TableColumnMeasure& measure);
   void applyPendingPageBreak();
   void pushBlockStyle(const BlockStyle& accumulated);
-  void flushPartWordBuffer();
+  void flushPartWordBuffer(bool completeWord = false);
   void breakTextLine(const BlockStyle& style);
   void fallbackTableRowToStacked();
   void closeTableCell();
@@ -324,6 +325,7 @@ class ChapterHtmlSlimParser {
     characterSpacing = character;
     wordSpacingPercent = wordPercent;
   }
+  void setBionicReadingStage(uint8_t stage) { bionicReadingStage = stage; }
   void setParagraphIndentSpaces(const uint8_t spaces) { paragraphIndentSpaces = spaces; }
 
   // One-shot parse: builds every page before returning (begin + step* + finish).

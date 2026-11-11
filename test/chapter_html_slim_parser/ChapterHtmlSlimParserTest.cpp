@@ -2,6 +2,7 @@
 #include <Epub/Page.h>
 #include <Epub/converters/ImageDimsProbe.h>
 #include <GfxRenderer.h>
+#include <Txt/TxtToHtml.h>
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -2316,4 +2317,82 @@ TEST(TextDecorationPosition, UnderlineStaysBelowBaseline) {
     line->render(renderer, 0, 0, 20);
     EXPECT_EQ(renderer.lastLineY, 34);
   });
+}
+
+TEST_F(ChapterHtmlSlimParserTest, BionicProtectsInlineWordsAndRubyAcrossPages) {
+  const std::string html =
+      "<html><body><p>reading 가나다라</p><p>rea<i>ding</i> "
+      "<ruby>한글<rt>hangul</rt></ruby> <b>author</b> "
+      "<u>underlined</u> <span style='font-size:150%'>sized</span></p></body></html>";
+  filepath = (std::filesystem::temp_directory_path() / "crosstwins-bionic-parser.xhtml").string();
+  {
+    HalFile file;
+    ASSERT_TRUE(file.open(filepath.c_str(), "wb"));
+    ASSERT_EQ(file.write(html.data(), html.size()), html.size());
+  }
+  parser.focusReadingEnabled = true;
+  parser.currentTextBlock = std::make_unique<ParsedText>(false, true, BlockStyle{}, 0, 0);
+  parser.setBionicReadingStage(0);
+  parser.paragraphIndentSpaces = 0;
+  parser.viewportWidth = 120;
+  parser.viewportHeight = 32;
+  unsigned pages = 0;
+  parser.completePageFn = [&](std::unique_ptr<Page> page, auto, auto, auto) {
+    ++pages;
+    for (const auto& element : page->elements) element->render(renderer, 0, 0, 0);
+  };
+  ASSERT_TRUE(parser.parseAndBuildPages());
+  EXPECT_GT(pages, 1u);
+  bool sawLatin = false, sawHangul = false, sawAuthor = false;
+  for (const auto& draw : renderer.textDraws) {
+    if (draw.text == "re") {
+      EXPECT_TRUE(draw.style & EpdFontFamily::BOLD);
+      sawLatin = true;
+    }
+    if (draw.text == "가") {
+      EXPECT_TRUE(draw.style & EpdFontFamily::BOLD);
+      sawHangul = true;
+    }
+    if (draw.text == "author") {
+      EXPECT_TRUE(draw.style & EpdFontFamily::BOLD);
+      sawAuthor = true;
+    }
+    if (draw.text == "rea" || draw.text == "ding" || draw.text == "한글" || draw.text == "sized")
+      EXPECT_FALSE(draw.style & EpdFontFamily::BOLD);
+  }
+  EXPECT_TRUE(sawLatin);
+  EXPECT_TRUE(sawHangul);
+  EXPECT_TRUE(sawAuthor);
+  std::filesystem::remove(filepath);
+}
+
+TEST_F(ChapterHtmlSlimParserTest, BionicTxtLineEndWordsShareEpubEmphasis) {
+  class Output : public Print {
+   public:
+    std::string text;
+    size_t write(uint8_t c) override {
+      text.push_back(static_cast<char>(c));
+      return 1;
+    }
+  } out;
+  ASSERT_TRUE(TxtToHtml::stream("bionic.txt", "reading\n가나다라\n", out));
+  filepath = (std::filesystem::temp_directory_path() / "crosstwins-bionic-txt.xhtml").string();
+  {
+    HalFile file;
+    ASSERT_TRUE(file.open(filepath.c_str(), "wb"));
+    ASSERT_EQ(file.write(out.text.data(), out.text.size()), out.text.size());
+  }
+  parser.focusReadingEnabled = true;
+  parser.setBionicReadingStage(0);
+  parser.currentTextBlock = std::make_unique<ParsedText>(false, true, BlockStyle{}, 0, 0);
+  parser.paragraphIndentSpaces = 0;
+  parser.completePageFn = [&](std::unique_ptr<Page> page, auto, auto, auto) {
+    for (const auto& element : page->elements) element->render(renderer, 0, 0, 0);
+  };
+  ASSERT_TRUE(parser.parseAndBuildPages());
+  std::string bold;
+  for (const auto& draw : renderer.textDraws)
+    if (draw.style & EpdFontFamily::BOLD) bold += draw.text;
+  EXPECT_EQ(bold, "re가");
+  std::filesystem::remove(filepath);
 }

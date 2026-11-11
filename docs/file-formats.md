@@ -90,6 +90,13 @@ if (parsedSize != fileSize) {
 
 ## `section.bin`
 
+### Version 74 (Bionic Reading experiment)
+
+Adds a uint8_t bionicReadingStage (0..5) immediately after focusReadingEnabled.
+The header grows by one byte. Completed and partial sections are rebuilt.
+Layout signatures advance to version 2; emphasis uses ceiling and a nine-codepoint cap.
+TXT/Markdown HTML caches are unchanged.
+
 ### Version 73
 
 Version 73 keeps the binary layout and rebuilds completed and partial sections.
