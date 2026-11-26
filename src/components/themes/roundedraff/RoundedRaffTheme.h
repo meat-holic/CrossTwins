@@ -92,7 +92,7 @@ constexpr ThemeMetrics values = {.batteryWidth = 15,
 
 class RoundedRaffTheme : public BaseTheme {
  protected:
-  void drawButtonMenuWithStyle(GfxRenderer& renderer, Rect rect, int buttonCount, int selectedIndex,
+  void drawButtonMenuWithStyle(const GfxRenderer& renderer, Rect rect, int buttonCount, int selectedIndex,
                                const std::function<std::string(int index)>& buttonLabel, home_menu::Alignment alignment,
                                home_menu::Appearance appearance) const;
   void drawButtonMenuRowWithStyle(const GfxRenderer& renderer, Rect rect, int index, int pageStartIndex, bool selected,

@@ -148,7 +148,8 @@ void RoundedRaffTheme::drawButtonMenu(GfxRenderer& renderer, Rect rect, int butt
   (void)rowIcon;
 }
 
-void RoundedRaffTheme::drawButtonMenuWithStyle(GfxRenderer& renderer, Rect rect, int buttonCount, int selectedIndex,
+void RoundedRaffTheme::drawButtonMenuWithStyle(const GfxRenderer& renderer, Rect rect, int buttonCount,
+                                               int selectedIndex,
                                                const std::function<std::string(int index)>& buttonLabel,
                                                const home_menu::Alignment alignment,
                                                const home_menu::Appearance appearance) const {

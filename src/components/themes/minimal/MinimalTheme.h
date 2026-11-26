@@ -31,7 +31,7 @@ class MinimalTheme final : public RoundedRaffTheme {
   void drawHomeRecentBooks(GfxRenderer& renderer, Rect rect, const std::vector<RecentBook>& recentBooks,
                            int selectorIndex, const int* progress, size_t progressCount) const override;
   bool usesHomeCoverImages() const override { return false; }
-  void drawHomeButtonMenu(GfxRenderer& renderer, Rect rect, int buttonCount, int selectedIndex,
+  void drawHomeButtonMenu(const GfxRenderer& renderer, Rect rect, int buttonCount, int selectedIndex,
                           const std::function<std::string(int index)>& buttonLabel) const;
   void drawButtonHints(GfxRenderer& renderer, const char* btn1, const char* btn2, const char* btn3,
                        const char* btn4) const override;

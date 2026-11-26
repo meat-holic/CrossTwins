@@ -146,7 +146,7 @@ void MinimalTheme::drawHomeRecentBooks(GfxRenderer& renderer, const Rect rect,
   renderer.setClipRect(previousClip[0], previousClip[1], previousClip[2], previousClip[3]);
 }
 
-void MinimalTheme::drawHomeButtonMenu(GfxRenderer& renderer, const Rect rect, const int buttonCount,
+void MinimalTheme::drawHomeButtonMenu(const GfxRenderer& renderer, const Rect rect, const int buttonCount,
                                       const int selectedIndex,
                                       const std::function<std::string(int index)>& buttonLabel) const {
   drawButtonMenuWithStyle(renderer, rect, buttonCount, selectedIndex, buttonLabel, menuAlignment(),
