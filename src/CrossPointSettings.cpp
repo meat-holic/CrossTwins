@@ -1,9 +1,11 @@
 #include "CrossPointSettings.h"
 
 #include <BlePageTurnerJson.h>
+#include <HalStorage.h>
 #include <I18n.h>
 #include <Logging.h>
 #include <ObfuscationUtils.h>
+#include <VectorFontSupport.h>
 
 #include <algorithm>
 #include <cstring>
@@ -20,6 +22,7 @@
 #include "util/ParagraphIndentMigration.h"
 #include "util/PluginLocations.h"
 #include "util/ReaderLineSpacingJson.h"
+#include "util/UiFontSettingsJson.h"
 
 static_assert(minimal_home_settings::kAlignmentCount == CrossPointSettings::MINIMAL_MENU_ALIGNMENT_COUNT);
 static_assert(minimal_home_settings::kDefaultAlignment == CrossPointSettings::MINIMAL_MENU_ALIGN_LEFT);
@@ -108,6 +111,11 @@ void CrossPointSettings::toJson(JsonDocument& doc) const {
   if (sdFontFamilyName[0] != '\0') {
     doc["sdFontFamilyName"] = sdFontFamilyName;
   }
+  if (uiFontFamilyName[0] || !legacyUiFontPath[0]) {
+    doc["uiFontFamilyName"] = uiFontFamilyName;
+  } else {
+    doc["uiSdFontPath"] = legacyUiFontPath;
+  }
   // Dictionary folder name — uses dynamic getter/setter in SettingsList, save manually
   if (dictionaryName[0] != '\0') {
     doc["dictionaryName"] = dictionaryName;
@@ -119,6 +127,7 @@ void CrossPointSettings::toJson(JsonDocument& doc) const {
   // The theme picker maps display positions separately on boards without PSRAM.
   doc["uiTheme"] = uiTheme;
   minimal_home_settings::writeJson(doc, minimalMenuAlignment, minimalHomeBackgroundPath);
+  doc["doublePwrBtn"] = doublePwrBtn;
 
   // Language -- managed by LanguageSelectActivity, not in SettingsList.
   // Stored as an ISO code string for stability across enum reorders.
@@ -210,6 +219,12 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
                                                  sizeof(minimalHomeBackgroundPath));
   needsResave |= reader_line_spacing::readJson(doc, lineSpacing, LINE_COMPRESSION_COUNT, LINE_SPACING_120);
 
+  // Keep landscape swapping opt-in when loading older settings.
+  if (doc["sideButtonFollowOrientation"].isNull()) {
+    sideButtonFollowOrientation = 0;
+    needsResave = true;
+  }
+
   // Plugin System did not exist in older settings files. Preserve the behavior
   // of users who already have SD plugins installed, while keeping the new
   // default disabled on clean installs.
@@ -273,6 +288,10 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
   longPressMenuFunction = clamp(doc["longPressMenuFunction"] | (uint8_t)LP_MENU_DISABLED,
                                 (uint8_t)LONG_PRESS_MENU_FUNCTION_COUNT, (uint8_t)LP_MENU_DISABLED);
   shortPwrBtn = clamp(doc["shortPwrBtn"] | (uint8_t)IGNORE, (uint8_t)SHORT_PWRBTN_COUNT, (uint8_t)IGNORE);
+  const uint8_t legacyDoublePwrBtn = doc["doubleClickPwrLight"].isNull()         ? defaultDoublePwrBtn()
+                                     : (doc["doubleClickPwrLight"] | (uint8_t)1) ? (uint8_t)PWR_FRONTLIGHT
+                                                                                 : (uint8_t)IGNORE;
+  doublePwrBtn = clamp(doc["doublePwrBtn"] | legacyDoublePwrBtn, (uint8_t)SHORT_PWRBTN_COUNT, defaultDoublePwrBtn());
   if (BoardConfig::hasHomeKey() && doc["homeButtonLongPressAction"].isNull() &&
       !doc["longPressMenuFunction"].isNull()) {
     static constexpr HomeButtonAction LEGACY[] = {HomeButtonAction::Sync,       HomeButtonAction::Ignore,
@@ -288,6 +307,11 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
   const char* sfn = doc["sdFontFamilyName"] | "";
   strncpy(sdFontFamilyName, sfn, sizeof(sdFontFamilyName) - 1);
   sdFontFamilyName[sizeof(sdFontFamilyName) - 1] = '\0';
+  const char* savedUiFont = doc["uiFontFamilyName"] | "";
+  copyToField(uiFontFamilyName, strlen(savedUiFont) < sizeof(uiFontFamilyName) ? savedUiFont : "",
+              sizeof(uiFontFamilyName));
+  const char* legacyPath = ui_font_settings::legacyPath(doc, sizeof(uiFontFamilyName), sizeof(legacyUiFontPath));
+  copyToField(legacyUiFontPath, legacyPath ? legacyPath : "", sizeof(legacyUiFontPath));
   if (sdFontFamilyName[0] == '\0') {
     switch (storedFontFamily) {
       case LEGACY_NOTOSERIF:
@@ -325,7 +349,7 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
     needsResave = true;
   }
 
-  if (needsResave) {
+  if (needsResave && !legacyUiFontPath[0]) {
     LOG_DBG("CPS", "Resaving settings to update format");
     requestResave();
   }
@@ -369,7 +393,39 @@ ReaderRenderSpec CrossPointSettings::readerRenderSpec(const uint16_t viewportWid
   spec.imageRendering = imageRendering == IMAGES_DISPLAY_BW ? static_cast<uint8_t>(IMAGES_DISPLAY) : imageRendering;
   spec.focusReadingEnabled = focusReadingEnabled != 0;
   spec.bionicReadingStage = focusReadingEnabled ? bionicReadingStage : 5;
+#if CROSSPOINT_VECTOR_FONTS
+  if (spec.embeddedStyle && publisherFonts <= static_cast<uint8_t>(PublisherFonts::All)) {
+    spec.publisherFonts = static_cast<PublisherFonts>(publisherFonts);
+  }
+#endif
   return spec;
+}
+
+void CrossPointSettings::migrateLegacyUiFont(const SdCardFontRegistry& registry,
+                                             bool (*supportsUiFont)(const SdCardFontFamilyInfo&)) {
+  if (!legacyUiFontPath[0] || uiFontFamilyName[0]) return;
+
+  std::lock_guard<std::mutex> lock(storeMutex);
+  // Patch only the UI font setting, preserving settings unknown to this firmware.
+  JsonDocument doc;
+  if (!readDocFromFile(getFilePath(), doc)) return;
+  const char* familyName =
+      ui_font_settings::migrate(doc, sizeof(uiFontFamilyName), sizeof(legacyUiFontPath), [&](const char* path) {
+        char installedPath[SdCardFontFamilyInfo::PATH_BUFFER_SIZE];
+        for (const auto& family : registry.getFamilies()) {
+          if (family.vector || !supportsUiFont(family)) continue;
+          for (const auto& file : family.files) {
+            if (family.filePath(file, installedPath, sizeof(installedPath)) && strcmp(path, installedPath) == 0 &&
+                Storage.exists(installedPath)) {
+              return family.name.c_str();
+            }
+          }
+        }
+        return static_cast<const char*>(nullptr);
+      });
+  if (!familyName || !writeDocToFile(getFilePath(), doc)) return;
+  copyToField(uiFontFamilyName, familyName, sizeof(uiFontFamilyName));
+  legacyUiFontPath[0] = '\0';
 }
 
 float CrossPointSettings::getReaderLineCompression() const {
@@ -420,5 +476,5 @@ int CrossPointSettings::getReaderFontId() const {
 
   // The built-in family is a single 10 pt resource. SD font resolution above
   // retains the user's selected family and point size when it is available.
-  return UI_FONT_ID;
+  return BUILTIN_READER_FONT_ID;
 }

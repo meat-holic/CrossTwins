@@ -165,6 +165,21 @@ jobs:
           cp ".pio/build/${PIO_ENV}/firmware.bin" "$asset"
           echo "name=$asset" >> "$GITHUB_OUTPUT"
 
+      - name: Prepare license asset
+        if: matrix.device == 'x3-x4'
+        env:
+          PIO_ENV: ${{ needs.validate-release.outputs.rc_build == 'true' && matrix.rc_env || matrix.release_env }}
+        run: python3 scripts/build_release_license.py --env "$PIO_ENV" --output dist/LICENSE
+
+      - name: Stage license asset
+        if: matrix.device == 'x3-x4'
+        uses: actions/upload-artifact@v6
+        with:
+          name: release-license
+          path: dist/LICENSE
+          if-no-files-found: error
+          retention-days: 1
+
       - name: Stage firmware asset
         uses: actions/upload-artifact@v6
         with:
@@ -210,6 +225,12 @@ jobs:
           pattern: crosstwins-*.bin
           merge-multiple: true
 
+      - name: Download license asset
+        uses: actions/download-artifact@v4
+        with:
+          name: release-license
+          path: dist
+
       - name: Verify firmware and prepare manifest
         env:
           RELEASE_TAG: ${{ needs.validate-release.outputs.release_tag }}
@@ -231,7 +252,7 @@ jobs:
         run: |
           set -euo pipefail
           version="${RELEASE_TAG#v}"
-          for asset in dist/crosstwins-*.bin "dist/crosstwins-${version}-manifest.json"; do
+          for asset in dist/crosstwins-*.bin "dist/crosstwins-${version}-manifest.json" dist/LICENSE; do
             test -f "$asset"
             name="${asset##*/}"
             curl --fail-with-body --silent --show-error \
@@ -256,7 +277,7 @@ jobs:
           version="${RELEASE_TAG#v}"
           mkdir verify
           python scripts/release_assets.py list --tag "$RELEASE_TAG" | sort > expected-assets.txt
-          printf '%s\n' "crosstwins-${version}-manifest.json" >> expected-assets.txt
+          printf '%s\n' "crosstwins-${version}-manifest.json" LICENSE >> expected-assets.txt
           sort -o expected-assets.txt expected-assets.txt
           release_json="$(gh api --paginate --slurp "repos/${GITHUB_REPOSITORY}/releases" | \
             jq -ce --arg tag "$RELEASE_TAG" \
@@ -276,6 +297,7 @@ jobs:
                 "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/assets/${asset_id}" \
                 --output "verify/${asset_name}"
             done
+          cmp dist/LICENSE verify/LICENSE
           python scripts/release_assets.py verify --tag "$RELEASE_TAG" --commit "$SOURCE_COMMIT" \
             --assets-dir verify --manifest "verify/crosstwins-${version}-manifest.json"
           echo "Release tag: $RELEASE_TAG" >> "$GITHUB_STEP_SUMMARY"

@@ -36,7 +36,9 @@ class ReleaseAssetPolicyTests(unittest.TestCase):
         self.assertEqual(
             release_assets.validate_release_tag("v2.0.0-rc2.rev.2", "2.0.0-rev.1", False), "2.0.0-rc2.rev.2"
         )
+        self.assertEqual(release_assets.validate_release_tag("v2.1.0-rc1", "2.1.0-rc1", True), "2.1.0-rc1")
         invalid_pairs = (
+            ("2.1.0-rc1", "2.1.0-rc1", False),
             ("2.0.0-rev.1", "2.0.0", False),
             ("2.0.0", "2.0.0-rev.1", True),
             ("2.1.0-rc1", "2.0.0-rev.1", True),
@@ -108,11 +110,15 @@ class ReleaseAssetPolicyTests(unittest.TestCase):
         self.assertIn('PLATFORMIO_BUILD_FLAGS="-DCROSSTWINS_USE_BUILD_VERSION=1"', release_candidate)
 
         platformio = (ROOT / "platformio.ini").read_text(encoding="utf-8")
-        self.assertEqual(platformio.count("${sysenv.CROSSPOINT_RELEASE_VERSION}"), 8)
+        rc_environments = re.findall(r"^\[env:([^\]]+_rc|gh_release_rc)\]", platformio, re.MULTILINE)
+        self.assertEqual(len(rc_environments), 9)
+        for environment in rc_environments:
+            config = platformio.split(f"[env:{environment}]\n", 1)[1].split("\n[", 1)[0]
+            self.assertIn("${sysenv.CROSSPOINT_RELEASE_VERSION}", config)
         configured_version = next(line for line in platformio.splitlines() if line.startswith("version = ")).split("=", 1)[1].strip()
-        self.assertEqual(configured_version, "2.0.0-rev.2")
+        self.assertEqual(configured_version, "2.1.0-rc1")
         self.assertEqual(
-            release_assets.validate_release_tag("v2.0.0-rev.2", configured_version, False), configured_version
+            release_assets.validate_release_tag("v2.1.0-rc1", configured_version, True), configured_version
         )
         header = (ROOT / "src" / "network" / "ReleaseAssetPolicy.h").read_text(encoding="utf-8")
         self.assertIn(f'PREFIX = "{policy["prefix"]}"', header)

@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstdio>
 #include <string>
 #include <vector>
 
@@ -33,9 +34,7 @@ namespace {
 constexpr int hPaddingInSelection = 8;
 constexpr int cornerRadius = 6;
 constexpr int topHintButtonY = 345;
-constexpr int maxListValueWidth = 200;
 constexpr int mainMenuIconSize = 32;
-constexpr int mainMenuColumns = 2;
 int coverWidth = 0;
 
 const uint8_t* iconForName(UIIcon icon) {
@@ -286,8 +285,9 @@ void LyraTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, const std:
 
     auto author = renderer.truncatedText(UI_10_FONT_ID, book.author.c_str(), textWidth);
     const int titleLineHeight = renderer.getLineHeight(UI_12_FONT_ID);
+    const int smallLineHeight = renderer.getLineHeight(UI_10_FONT_ID);
     const int titleBlockHeight = titleLineHeight * static_cast<int>(titleLines.size());
-    const int authorHeight = book.author.empty() ? 0 : (renderer.getLineHeight(UI_10_FONT_ID) * 3 / 2);
+    const int authorHeight = book.author.empty() ? 0 : smallLineHeight * 3 / 2;
     const int totalBlockHeight = titleBlockHeight + authorHeight;
     int titleY = tileY + tileHeight / 2 - totalBlockHeight / 2;
     const int textX = tileX + hPaddingInSelection + coverWidth + LyraMetrics::values.verticalSpacing;
@@ -297,9 +297,9 @@ void LyraTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, const std:
     }
     int textBlockEnd = titleY;
     if (!book.author.empty()) {
-      titleY += renderer.getLineHeight(UI_10_FONT_ID) / 2;
+      titleY += smallLineHeight / 2;
       renderer.drawText(UI_10_FONT_ID, textX, titleY, author.c_str(), true);
-      textBlockEnd = titleY + renderer.getLineHeight(UI_10_FONT_ID);
+      textBlockEnd = titleY + smallLineHeight;
     }
 
     if (progressSnapshot && progressSnapshot->percent >= 0 && textWidth >= 3) {
@@ -307,11 +307,20 @@ void LyraTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, const std:
       const int barY = tileY + tileHeight - hPaddingInSelection - barHeight;
       const int lineHeight = renderer.getLineHeight(UI_10_FONT_ID);
       const int chapterY = barY - lineHeight - 4;
-      const bool chapterFits =
-          progressSnapshot->chapterTitle[0] != '\0' && chapterY > textBlockEnd + 3 && chapterY + lineHeight + 2 < barY;
-      if (chapterFits) {
-        const std::string chapter = renderer.truncatedText(UI_10_FONT_ID, progressSnapshot->chapterTitle, textWidth);
-        renderer.drawText(UI_10_FONT_ID, textX, chapterY, chapter.c_str(), true);
+      if (chapterY > textBlockEnd + 3) {
+        char label[12];
+        snprintf(label, sizeof(label), "%d%%", progressSnapshot->percent);
+        const int labelWidth = renderer.getTextWidth(UI_10_FONT_ID, label, EpdFontFamily::BOLD);
+        if (labelWidth <= textWidth) {
+          renderer.drawText(UI_10_FONT_ID, textX, chapterY, label, true, EpdFontFamily::BOLD);
+        }
+        constexpr int labelGap = 8;
+        const int chapterOffset = labelWidth + labelGap;
+        if (progressSnapshot->chapterTitle[0] != '\0' && textWidth > chapterOffset) {
+          const auto chapter =
+              renderer.truncatedText(UI_10_FONT_ID, progressSnapshot->chapterTitle, textWidth - chapterOffset);
+          renderer.drawText(UI_10_FONT_ID, textX + chapterOffset, chapterY, chapter.c_str(), true);
+        }
       }
 
       if (barY > textBlockEnd + 3) {

@@ -64,11 +64,10 @@ class OptionPopup {
     message = messageStr ? messageStr : "";
   }
 
-  void show(StrId titleId, const std::vector<std::string>& options, int currentIndex,
-            std::function<void(int)> onSelect) {
+  void show(StrId titleId, std::vector<std::string> options, int currentIndex, std::function<void(int)> onSelect) {
     title = I18N.get(titleId);
     headline.clear();
-    ownedStrings = options;
+    ownedStrings = std::move(options);
     activate(currentIndex, std::move(onSelect));
   }
 
@@ -84,8 +83,7 @@ class OptionPopup {
         if (event && event.action == ACTION_OPTION) {
           // Tap released on an option: select it, fire, dismiss.
           selectedIndex = event.value;
-          active = false;
-          if (onSelectCallback) onSelectCallback(selectedIndex);
+          confirmSelection();
           haptic_feedback::touchAction();
           requestUpdate();
           return true;
@@ -115,6 +113,14 @@ class OptionPopup {
           }
         }
       }
+      if (!snap.touchReleased || snap.touchX >= 0) return true;
+    }
+
+    const auto swipe = input.wasSwipe();
+    if (swipe == MappedInputManager::SwipeDir::Up || swipe == MappedInputManager::SwipeDir::Down) {
+      const int rows = visibleOptions.load();
+      pendingScroll.fetch_add(swipe == MappedInputManager::SwipeDir::Up ? rows : -rows);
+      requestUpdate();
       return true;
     }
 
@@ -127,18 +133,21 @@ class OptionPopup {
   bool handleButtons(const bool previous, const bool next, const bool confirm, const bool back,
                      const std::function<void()>& requestUpdate) {
     if (!active) return false;
-    const int count = std::min<int>(ownedStrings.size(), MAX_OPTIONS);
+    const int count = static_cast<int>(ownedStrings.size());
     if (previous) {
       selectedIndex = (selectedIndex - 1 + count) % count;
+      pendingScroll = 0;
+      followSelection = true;
       requestUpdate();
       return true;
     } else if (next) {
       selectedIndex = (selectedIndex + 1) % count;
+      pendingScroll = 0;
+      followSelection = true;
       requestUpdate();
       return true;
     } else if (confirm) {
-      active = false;
-      if (onSelectCallback) onSelectCallback(selectedIndex);
+      confirmSelection();
       requestUpdate();
       return true;
     } else if (back) {
@@ -183,16 +192,8 @@ class OptionPopup {
     fui::Frame<INTERACTION_CAPACITY> frame(target, device, noInput, interactions);
 
     const auto& metrics = UITheme::getInstance().getMetrics();
-    const int totalOptions = static_cast<int>(ownedStrings.size());
-    const uint8_t count = static_cast<uint8_t>(totalOptions > MAX_OPTIONS ? MAX_OPTIONS : totalOptions);
-
-    fui::DialogOption options[MAX_OPTIONS];
-    for (uint8_t i = 0; i < count; ++i) {
-      options[i].label = ownedStrings[i].c_str();
-      options[i].action = ACTION_OPTION;
-      options[i].value = static_cast<int16_t>(i);
-      options[i].state = (i == selectedIndex) ? fui::StateFocused : fui::StateNormal;
-    }
+    const int count = static_cast<int>(ownedStrings.size());
+    fui::DialogOption options[MAX_VISIBLE_OPTIONS];
 
     fui::OptionDialogProps props;
     props.title = title.empty() ? nullptr : title.c_str();
@@ -204,7 +205,7 @@ class OptionPopup {
       props.messageText.maxLines = 6;
     }
     props.options = options;
-    props.optionCount = count;
+    props.optionCount = 1;
     props.verticalOptions = true;
     // Touch only: physical buttons stay on the legacy wrap/confirm path above,
     // so the buffer never competes with it for focus/confirm dispatch.
@@ -242,16 +243,50 @@ class OptionPopup {
 
     // Fixed fraction of the screen, clamped by the theme's side margins; the
     // old max-text-width sizing is gone, long labels wrap inside the buttons.
-    const fui::Rect screen = device.screen();
+    const auto safe = UITheme::getInstance().getScreenSafeArea(renderer, true, false);
+    const fui::Rect screen{fui::clampI16(safe.x), fui::clampI16(safe.y), fui::clampI16(safe.width),
+                           fui::clampI16(safe.height)};
     const int16_t width =
         fui::clampI16(std::min<int>(screen.width * 3 / 4, screen.width - metrics.optionPopupDialogSideMargin * 2));
-    const int16_t height = fui::clampI16(fui::optionDialogHeight(target, props, width), 0, screen.height);
+    const int singleOptionHeight = fui::optionDialogHeight(target, props, width);
+    const int maxHeight = screen.height - metrics.optionPopupDialogSideMargin * 2;
+    const int visibleCount = std::clamp(1 + (maxHeight - singleOptionHeight) / (props.buttonHeight + props.gap), 1,
+                                        std::min(count, MAX_VISIBLE_OPTIONS));
+    const bool follow = followSelection.exchange(false);
+    const int selected = selectedIndex.load();
+    if (follow) {
+      firstOption = fui::listTopIndexFor(selected, firstOption, visibleCount, count);
+    }
+    const int scroll = std::clamp(pendingScroll.exchange(0), -count, count);
+    firstOption = std::clamp(firstOption + scroll, 0, count - visibleCount);
+    visibleOptions = visibleCount;
+    for (int row = 0; row < visibleCount; ++row) {
+      const int index = firstOption + row;
+      options[row].label = ownedStrings[index].c_str();
+      options[row].action = ACTION_OPTION;
+      options[row].value = index;
+      options[row].state = index == selected ? fui::StateFocused : fui::StateNormal;
+    }
+    props.optionCount = static_cast<uint8_t>(visibleCount);
+    const int16_t height = fui::optionDialogHeight(target, props, width);
     const fui::Rect dialogRect = fui::centeredRect(screen, fui::Size{width, height});
 
     // Chrome guard first, options after: route() scans newest-first, so the
     // option buttons win inside the dialog and the guard absorbs the rest.
     frame.hit(dialogRect, ACTION_CHROME, 0, fui::InputTouch);
     fui::optionDialog(frame, dialogRect, props);
+    if (visibleCount < count) {
+      constexpr int16_t barWidth = 4;
+      const int trackHeight = visibleCount * (props.buttonHeight + props.gap) - props.gap;
+      const int trackY = dialogRect.bottom() - props.padding.bottom - trackHeight;
+      const int16_t barX = fui::clampI16(dialogRect.right() - props.padding.right / 2 - barWidth / 2);
+      const int thumbHeight = std::max<int>(barWidth, trackHeight * visibleCount / count);
+      const int thumbY = trackY + (trackHeight - thumbHeight) * firstOption / (count - visibleCount);
+      target.fill({barX, fui::clampI16(trackY), barWidth, fui::clampI16(trackHeight)},
+                  fui::Paint::dither(fui::Color::LightGray));
+      target.fill({barX, fui::clampI16(thumbY), barWidth, fui::clampI16(thumbHeight)},
+                  fui::Paint::solid(fui::Color::Black));
+    }
     // Atomically make this generation the one handleInput() reads, now that
     // every hit() call for this frame is done.
     interactions.publish();
@@ -259,6 +294,7 @@ class OptionPopup {
   }
 
   bool isActive() const { return active; }
+  const char* optionLabel(int index) const { return ownedStrings[index].c_str(); }
 
   // Close without firing the callback (the surface under the popup is going
   // away, e.g. its host screen closes from outside the popup's own input).
@@ -268,17 +304,26 @@ class OptionPopup {
   }
 
  private:
-  // The dialog has no scrolling, so options past MAX_OPTIONS would render off
-  // screen anyway; a fixed cap keeps the DialogOption array on the stack and
-  // the interaction table small. +1 slot for the chrome guard rect.
-  static constexpr int MAX_OPTIONS = 16;
-  static constexpr size_t INTERACTION_CAPACITY = MAX_OPTIONS + 1;
+  // The render window and touch table only hold rows visible on screen.
+  static constexpr int MAX_VISIBLE_OPTIONS = 16;
+  static constexpr size_t INTERACTION_CAPACITY = MAX_VISIBLE_OPTIONS + 1;
   static constexpr freeink::ui::ActionId ACTION_OPTION = 1;
   static constexpr freeink::ui::ActionId ACTION_CHROME = 2;
 
+  void confirmSelection() {
+    active = false;
+    // A selection can open another popup, for example to display an error.
+    auto callback = std::move(onSelectCallback);
+    if (callback) callback(selectedIndex.load());
+  }
+
   void activate(int currentIndex, std::function<void(int)> onSelect) {
-    const int count = std::min<int>(ownedStrings.size(), MAX_OPTIONS);
+    const int count = static_cast<int>(ownedStrings.size());
     selectedIndex = currentIndex >= 0 && currentIndex < count ? currentIndex : 0;
+    firstOption = 0;
+    visibleOptions = 1;
+    pendingScroll = 0;
+    followSelection = true;
     onSelectCallback = std::move(onSelect);
     message.clear();
     uiReady = false;
@@ -290,7 +335,12 @@ class OptionPopup {
   std::string headline;
   std::string message;
   std::vector<std::string> ownedStrings;
-  int selectedIndex = 0;
+  std::atomic<int> selectedIndex{0};
+  // Only rendering moves the viewport; input queues scroll/follow requests.
+  mutable int firstOption = 0;
+  mutable std::atomic<int> visibleOptions{1};
+  mutable std::atomic<int> pendingScroll{0};
+  mutable std::atomic<bool> followSelection{true};
   std::function<void(int)> onSelectCallback;
   // Written by the render task (frame registration), routed by the loop task;
   // uiReady closes the rebuild window exactly like UiListActivity::uiReady.

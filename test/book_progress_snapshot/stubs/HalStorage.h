@@ -15,6 +15,11 @@ class HalFile {
 
   uint64_t fileSize64() const { return bytes.size(); }
 
+  bool close() {
+    open = false;
+    return true;
+  }
+
   bool seek64(const uint64_t offset) {
     if (!open || offset > bytes.size()) return false;
     position = static_cast<size_t>(offset);

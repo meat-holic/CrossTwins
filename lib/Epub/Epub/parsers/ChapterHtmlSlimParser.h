@@ -13,6 +13,7 @@
 
 #include "Epub/FootnoteEntry.h"
 #include "Epub/ParsedText.h"
+#include "Epub/ReaderRenderSpec.h"
 #include "Epub/blocks/ImageBlock.h"
 #include "Epub/blocks/TextBlock.h"
 #include "Epub/css/CssParser.h"
@@ -35,6 +36,10 @@ class ChapterHtmlSlimParser {
   int skipUntilDepth = INT_MAX;
   int boldUntilDepth = INT_MAX;
   int italicUntilDepth = INT_MAX;
+  // Depth of the open h1-h6, INT_MAX outside one. Blocks started inside it are not
+  // hyphenated: a title split across lines mid-word reads badly.
+  int headingDepth = INT_MAX;
+  bool blockHyphenationEnabled() const { return hyphenationEnabled && headingDepth == INT_MAX; }
   // buffer for building up words from characters, will auto break if longer than this
   // leave one char at end for null pointer
   char partWordBuffer[MAX_WORD_SIZE + 1] = {};
@@ -54,6 +59,7 @@ class ChapterHtmlSlimParser {
   uint8_t paragraphIndentSpaces = 2;
   int8_t characterSpacing = 0;
   uint8_t wordSpacingPercent = 100;
+  PublisherFonts publisherFonts = PublisherFonts::Off;
   uint8_t paragraphAlignment;
   uint16_t viewportWidth;
   uint16_t viewportHeight;
@@ -86,6 +92,8 @@ class ChapterHtmlSlimParser {
     // Inline font size: a multiple of the parent size, or of the body size when rem.
     bool hasFontScale = false, fontScaleRem = false;
     float fontScale = 1.0f;
+    bool hasFontFamily = false;
+    uint32_t fontFamily = 0;  // CssStyle::fontFamily
   };
   std::vector<StyleStackEntry> inlineStyleStack;
   std::vector<BlockStyle> blockStyleStack;  // accumulated block styles from open ancestor elements
@@ -105,6 +113,12 @@ class ChapterHtmlSlimParser {
   bool effectiveSub = false;
   bool effectiveSmallCaps = false;
   bool effectivePreserveWhitespace = false;
+  // Embedded font-family for the next word after PublisherFonts filtering; 0 = reader font.
+  uint32_t effectiveFontFamily = 0;
+  // Root-declared or predominant prose family, kept in the reader font in Accents mode.
+  uint32_t bodyFontFamily = 0;
+  bool bodyFontDetected = false;
+  bool detectBodyFont();
   bool pendingPageBreak = false;  // set when a page-break-after element closes
 
   // Initial letter captured from a ::first-letter block or a leading float/initial-letter span,
@@ -274,6 +288,8 @@ class ChapterHtmlSlimParser {
   void makePages(bool includeLastLine = true, bool paragraphEnd = true);
   void applyBlockFontScale(BlockStyle& blockStyle, const CssStyle& cssStyle, const char* tagName) const;
   int fontIdForScale(float scale) const;
+  // The embedded family's font at `scale` when the book provides it, else fontIdForScale.
+  int fontIdFor(float scale, uint32_t family) const;
   int prepareBlockFont(ParsedText& text, float scale);
   static EpdFontFamily::Style fontStyleForTextDecoration(CssTextDecoration decoration);
   static void applyDirectionToEntry(StyleStackEntry& entry, const CssStyle& css);
@@ -327,6 +343,7 @@ class ChapterHtmlSlimParser {
   }
   void setBionicReadingStage(uint8_t stage) { bionicReadingStage = stage; }
   void setParagraphIndentSpaces(const uint8_t spaces) { paragraphIndentSpaces = spaces; }
+  void setPublisherFonts(const PublisherFonts mode) { publisherFonts = mode; }
 
   // One-shot parse: builds every page before returning (begin + step* + finish).
   bool parseAndBuildPages();

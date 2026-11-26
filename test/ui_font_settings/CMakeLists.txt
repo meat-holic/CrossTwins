@@ -1,0 +1,4 @@
+add_executable(ui_font_settings_tests UiFontSettingsTest.cpp)
+target_include_directories(ui_font_settings_tests PRIVATE ${REPO_ROOT}/src)
+target_link_libraries(ui_font_settings_tests PRIVATE crosspoint_test_common ArduinoJson GTest::gtest_main)
+gtest_discover_tests(ui_font_settings_tests)

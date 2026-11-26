@@ -73,10 +73,9 @@ bool popKey(KeyPress& out) {
   return true;
 }
 
-// With no selected plan the SDK tries each bonded remote in turn (pick 1). pick 0
-// limits reconnect to the chosen peer, without falling back to another bond.
+// The selected-peer option is strict; the other option accepts the first bonded advertiser.
 bool armBondedReconnect(const uint8_t pick, const char* priorityAddr) {
-  if (!shouldArmSelectedPeerReconnect(pick)) return true;
+  if (!shouldArmSelectedPeerReconnect(pick)) return hid().armBondedReconnect(freeink::PickPolicy::First, nullptr);
   return priorityAddr != nullptr && priorityAddr[0] != '\0' && hid().armSelectedPeerReconnect(priorityAddr);
 }
 Peer linked() { return peerOf(hid().connectedAddr(), hid().connectedName()); }

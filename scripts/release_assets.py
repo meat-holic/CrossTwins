@@ -40,7 +40,7 @@ def validate_release_tag(tag: str, configured_version: str, prerelease: bool) ->
     if prerelease:
         if version == LEGACY_STABLE_RC_TAG or not is_rc or base_version != configured_base:
             raise ValueError(f"prerelease tag does not match configured version series: {tag!r}")
-    elif version != configured and version != LEGACY_STABLE_RC_TAG:
+    elif version != LEGACY_STABLE_RC_TAG and (is_rc or version != configured):
         raise ValueError(f"stable release tag does not match configured version: {tag!r}")
 
     return version

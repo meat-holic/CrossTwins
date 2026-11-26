@@ -32,8 +32,11 @@ TEST(I18nLocaleFallbackTest, RemovedAndUnknownSavedCodesFallBackToEnglish) {
 }
 
 TEST(I18nLocaleFallbackTest, RemovedLocaleCharacterSetsFallBackToEnglish) {
-  EXPECT_STREQ(I18n::getCharacterSet(Language::EN), I18n::getCharacterSet(Language::FR));
-  EXPECT_STREQ(I18n::getCharacterSet(Language::EN), I18n::getCharacterSet(static_cast<Language>(255)));
+  for (const auto language : {Language::FR, static_cast<Language>(255)}) {
+    I18N.setLanguage(language);
+    EXPECT_STREQ(CHARACTER_SETS[static_cast<size_t>(Language::EN)],
+                 CHARACTER_SETS[static_cast<size_t>(I18N.getLanguage())]);
+  }
 }
 
 TEST(I18nLocaleFallbackTest, EveryGeneratedStringIndexIsReadableInBothLocales) {

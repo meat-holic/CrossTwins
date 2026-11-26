@@ -11,6 +11,10 @@ SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "patch_wolfssl.py"
 class FakeEnvironment:
     def __init__(self, project_dir: Path):
         self.project_dir = project_dir
+        self.middleware = {}
+
+    def AddBuildMiddleware(self, callback, pattern):
+        self.middleware[pattern] = callback
 
     def subst(self, value: str) -> str:
         if value != "$PROJECT_DIR":
@@ -29,6 +33,7 @@ def load_patch_function(project_dir: Path):
     namespace["Import"] = import_scons_value
     source = SCRIPT.read_text(encoding="utf-8")
     exec(compile(source, str(SCRIPT), "exec"), namespace)
+    assert namespace["env"].middleware == {"*internal.c": namespace["patch_internal"]}
     return namespace["patch_user_settings"], namespace["OVERRIDES"]
 
 

@@ -22,8 +22,8 @@
 //
 // Rows render through fui::list on the UiTabListActivity ring (0 = the sort
 // strip, 1..N = the books), which is what brings touch to rows and tabs. Titles
-// are truncated to one line by the widget — more books on the screen, even if
-// half a name is hidden.
+// wrap to two lines and are ellipsized beyond that; only rows with a long
+// title grow taller.
 //
 // Only the visible window of rows is materialized per render (strings and
 // ListItems for at most one page). The ordinary shelf therefore keeps one page
@@ -136,6 +136,9 @@ class LibraryListActivity final : public UiTabListActivity {
   // read order; the modification-time list follows with those books skipped.
   // Entries below pinnedCount() are store rows; the rest go through rowFor().
   int pinnedCount() const;
+  // Setting: the Recent tab lists opened books only.
+  bool openedOnly() const;
+  const RecentBook* storeBook(int entry) const;
   // Re-match the store against the index (chunked scan). Call whenever the
   // index or the store changes.
   void resolvePinned();

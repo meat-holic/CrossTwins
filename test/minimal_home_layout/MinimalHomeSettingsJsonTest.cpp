@@ -28,7 +28,8 @@ TEST(MinimalHomeSettingsJson, RoundTripsAlignmentAndBackgroundPath) {
   EXPECT_STREQ(written[minimal_home_settings::kBackgroundPathKey].as<const char*>(), original.data());
 
   uint8_t alignment = minimal_home_settings::kDefaultAlignment;
-  EXPECT_FALSE(minimal_home_settings::readJson(written.as<JsonVariantConst>(), alignment, restored.data(), restored.size()));
+  EXPECT_FALSE(
+      minimal_home_settings::readJson(written.as<JsonVariantConst>(), alignment, restored.data(), restored.size()));
   EXPECT_EQ(alignment, 2);
   EXPECT_STREQ(restored.data(), original.data());
 }

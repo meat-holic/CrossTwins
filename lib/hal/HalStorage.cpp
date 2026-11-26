@@ -9,6 +9,7 @@
 #endif
 
 #include <cassert>
+#include <cstring>
 
 #define SDCard SDCardManager::getInstance()
 
@@ -16,6 +17,16 @@ namespace {
 #if FREEINK_CAP_USB_MSC
 freeink::UsbMassStorage usbMassStorage;
 #endif
+}  // namespace
+
+namespace {
+// Check while holding the storage lock; these names may predate the SDK transaction.
+bool userFileSidecarIsOccupied(const char* path, const char* suffix) {
+  const String sidecar = String(path) + suffix;
+  if (sidecar.length() == std::strlen(path) + 4 && !SDCard.exists(sidecar.c_str())) return false;
+  LOG_ERR("HAL", "Cannot reserve user file sidecar %s%s", path, suffix);
+  return true;
+}
 }  // namespace
 
 HalStorage HalStorage::instance;
@@ -31,11 +42,8 @@ HalStorage::HalStorage() {
   assert(storageMutex != nullptr);
 }
 
-// begin() and ready() are only called from setup, no need to acquire mutex for them
-
+// Setup calls begin() before any storage users start.
 bool HalStorage::begin() { return SDCard.begin(); }
-
-bool HalStorage::ready() const { return SDCard.ready(); }
 
 // For the rest of the methods, we acquire the mutex to ensure thread safety
 
@@ -123,18 +131,15 @@ UsbDriveState HalStorage::usbDriveState() const {
   HalStorage::StorageLock lock;               \
   return SDCard.method(__VA_ARGS__);
 
-std::vector<String> HalStorage::listFiles(const char* path, int maxFiles) {
-  HAL_STORAGE_WRAPPED_CALL(listFiles, path, maxFiles);
-}
+bool HalStorage::ready() const { HAL_STORAGE_WRAPPED_CALL(ready); }
+
+uint64_t HalStorage::sdTotalBytes() { HAL_STORAGE_WRAPPED_CALL(sdTotalBytes); }
+bool HalStorage::sdUsedBytes(uint64_t& usedBytes) { HAL_STORAGE_WRAPPED_CALL(sdUsedBytes, usedBytes); }
 
 String HalStorage::readFile(const char* path) { HAL_STORAGE_WRAPPED_CALL(readFile, path); }
 
 bool HalStorage::readFileToStream(const char* path, Print& out, size_t chunkSize) {
   HAL_STORAGE_WRAPPED_CALL(readFileToStream, path, out, chunkSize);
-}
-
-size_t HalStorage::readFileToBuffer(const char* path, char* buffer, size_t bufferSize, size_t maxBytes) {
-  HAL_STORAGE_WRAPPED_CALL(readFileToBuffer, path, buffer, bufferSize, maxBytes);
 }
 
 // Composed of already-locked HalStorage/HalFile operations; needs no
@@ -158,6 +163,12 @@ bool HalStorage::readFileToString(const char* moduleName, const std::string& pat
 
 bool HalStorage::writeFile(const char* path, const String& content) {
   HAL_STORAGE_WRAPPED_CALL(writeFile, path, content);
+}
+
+bool HalStorage::writeUserFile(const char* path, const String& content) {
+  StorageLock lock;
+  if (userFileSidecarIsOccupied(path, ".bak") || userFileSidecarIsOccupied(path, ".tmp")) return false;
+  return SDCard.writeFile(path, content);
 }
 
 bool HalStorage::ensureDirectoryExists(const char* path) { HAL_STORAGE_WRAPPED_CALL(ensureDirectoryExists, path); }
@@ -202,6 +213,12 @@ bool HalStorage::replaceFile(const char* tmpPath, const char* path) {
   HAL_STORAGE_WRAPPED_CALL(replaceFile, tmpPath, path);
 }
 
+bool HalStorage::replaceUserFile(const char* tmpPath, const char* path) {
+  StorageLock lock;
+  if (userFileSidecarIsOccupied(path, ".bak")) return false;
+  return SDCard.replaceFile(tmpPath, path);
+}
+
 bool HalStorage::rmdir(const char* path) { HAL_STORAGE_WRAPPED_CALL(rmdir, path); }
 
 bool HalStorage::openFileForRead(const char* moduleName, const char* path, HalFile& file) {
@@ -213,10 +230,6 @@ bool HalStorage::openFileForRead(const char* moduleName, const char* path, HalFi
 }
 
 bool HalStorage::openFileForRead(const char* moduleName, const std::string& path, HalFile& file) {
-  return openFileForRead(moduleName, path.c_str(), file);
-}
-
-bool HalStorage::openFileForRead(const char* moduleName, const String& path, HalFile& file) {
   return openFileForRead(moduleName, path.c_str(), file);
 }
 
@@ -276,7 +289,6 @@ int HalFile::read() { HAL_FILE_WRAPPED_CALL(read, ); }
 size_t HalFile::write(const uint8_t* buf, size_t count) { HAL_FILE_WRAPPED_CALL(write, buf, count); }
 size_t HalFile::write(const void* buf, size_t count) { HAL_FILE_WRAPPED_CALL(write, buf, count); }
 size_t HalFile::write(uint8_t b) { HAL_FILE_WRAPPED_CALL(write, b); }
-bool HalFile::rename(const char* newPath) { HAL_FILE_WRAPPED_CALL(rename, newPath); }
 bool HalFile::isDirectory() const { HAL_FILE_FORWARD_CALL(isDirectory, ); }  // already thread-safe, no need to wrap
 void HalFile::rewindDirectory() { HAL_FILE_WRAPPED_CALL(rewindDirectory, ); }
 bool HalFile::close() { HAL_FILE_WRAPPED_CALL(close, ); }

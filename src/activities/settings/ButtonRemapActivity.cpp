@@ -23,6 +23,7 @@ void ButtonRemapActivity::onEnter() {
 
   // Start with all roles unassigned to avoid duplicate blocking.
   currentStep = 0;
+  exitAction = ExitAction::None;
   tempMapping[0] = kUnassigned;
   tempMapping[1] = kUnassigned;
   tempMapping[2] = kUnassigned;
@@ -38,6 +39,15 @@ void ButtonRemapActivity::onEnter() {
 }
 
 void ButtonRemapActivity::loop() {
+  // Remember the first side action even if another button is still held.
+  if (exitAction == ExitAction::None || exitAction == ExitAction::Save) {
+    if (mappedInput.wasReleased(MappedInputManager::Button::Up)) {
+      exitAction = ExitAction::Reset;
+    } else if (mappedInput.wasReleased(MappedInputManager::Button::Down)) {
+      exitAction = ExitAction::Cancel;
+    }
+  }
+
   // Clear any temporary warning after its timeout.
   if (errorUntil > 0 && millis() > errorUntil) {
     errorMessage.clear();
@@ -46,22 +56,33 @@ void ButtonRemapActivity::loop() {
     return;
   }
 
-  // Side buttons:
-  // - Up: reset mapping to defaults and exit.
-  // - Down: cancel without saving.
-  if (mappedInput.wasPressed(MappedInputManager::Button::Up)) {
-    // Persist default mapping immediately so the user can recover quickly.
-    SETTINGS.frontButtonBack = CrossPointSettings::FRONT_HW_BACK;
-    SETTINGS.frontButtonConfirm = CrossPointSettings::FRONT_HW_CONFIRM;
-    SETTINGS.frontButtonLeft = CrossPointSettings::FRONT_HW_LEFT;
-    SETTINGS.frontButtonRight = CrossPointSettings::FRONT_HW_RIGHT;
-    SETTINGS.saveToFile();
-    finish();
-    return;
-  }
-
-  if (mappedInput.wasPressed(MappedInputManager::Button::Down)) {
-    // Exit without changing settings.
+  // Finish the entire gesture before returning to Settings or changing the live mapping.
+  if (exitAction != ExitAction::None) {
+    if (mappedInput.isPressed(MappedInputManager::Button::Back) ||
+        mappedInput.isPressed(MappedInputManager::Button::Confirm) ||
+        mappedInput.isPressed(MappedInputManager::Button::Left) ||
+        mappedInput.isPressed(MappedInputManager::Button::Right) ||
+        mappedInput.isPressed(MappedInputManager::Button::Up) ||
+        mappedInput.isPressed(MappedInputManager::Button::Down)) {
+      return;
+    }
+    switch (exitAction) {
+      case ExitAction::None:
+        return;
+      case ExitAction::Save:
+        applyTempMapping();
+        SETTINGS.saveToFile();
+        break;
+      case ExitAction::Reset:
+        SETTINGS.frontButtonBack = CrossPointSettings::FRONT_HW_BACK;
+        SETTINGS.frontButtonConfirm = CrossPointSettings::FRONT_HW_CONFIRM;
+        SETTINGS.frontButtonLeft = CrossPointSettings::FRONT_HW_LEFT;
+        SETTINGS.frontButtonRight = CrossPointSettings::FRONT_HW_RIGHT;
+        SETTINGS.saveToFile();
+        break;
+      case ExitAction::Cancel:
+        break;
+    }
     finish();
     return;
   }
@@ -87,11 +108,7 @@ void ButtonRemapActivity::loop() {
     currentStep++;
 
     if (currentStep >= kRoleCount) {
-      // All roles assigned; save to settings and exit.
-      applyTempMapping();
-      SETTINGS.saveToFile();
-      finish();
-      return;
+      exitAction = ExitAction::Save;
     }
 
     requestUpdate();
@@ -136,12 +153,9 @@ void ButtonRemapActivity::render(RenderLock&&) {
                    Rect{0, topOffset + 4 * metrics.listRowHeight + 5 * metrics.verticalSpacing + 20, pageWidth, 20},
                    tr(STR_REMAP_CANCEL_HINT));
 
-  // Live preview of logical labels under front buttons.
-  // This mirrors the on-device front button order: Back, Confirm, Left, Right.
-  GUI.drawButtonHints(renderer, labelForHardware(CrossPointSettings::FRONT_HW_BACK),
-                      labelForHardware(CrossPointSettings::FRONT_HW_CONFIRM),
-                      labelForHardware(CrossPointSettings::FRONT_HW_LEFT),
-                      labelForHardware(CrossPointSettings::FRONT_HW_RIGHT));
+  const auto buttons = MappedInputManager::frontButtonsInPhysicalOrder();
+  GUI.drawButtonHints(renderer, labelForHardware(buttons[0]), labelForHardware(buttons[1]),
+                      labelForHardware(buttons[2]), labelForHardware(buttons[3]));
   renderer.displayBuffer();
 }
 
@@ -167,7 +181,7 @@ void ButtonRemapActivity::buildScreen(UiScreen& screen) {
   fui::ListProps props;
   props.items = rowItems;
   props.count = kRoleCount;
-  props.selectedIndex = currentStep;
+  props.selectedIndex = currentStep < kRoleCount ? currentStep : -1;
   props.inputMask = fui::InputNone;
   props.scrollIndicator = false;
   // Label at the value's font size: both sides of the row read as one unit.
@@ -212,16 +226,16 @@ const char* ButtonRemapActivity::getRoleName(const uint8_t roleIndex) {
 }
 
 const char* ButtonRemapActivity::getHardwareName(const uint8_t buttonIndex) const {
-  switch (buttonIndex) {
-    case CrossPointSettings::FRONT_HW_BACK:
-      return tr(STR_HW_BACK_LABEL);
-    case CrossPointSettings::FRONT_HW_CONFIRM:
-      return tr(STR_HW_CONFIRM_LABEL);
-    case CrossPointSettings::FRONT_HW_LEFT:
-      return tr(STR_HW_LEFT_LABEL);
-    case CrossPointSettings::FRONT_HW_RIGHT:
-      return tr(STR_HW_RIGHT_LABEL);
-    default:
-      return "Unknown";
+  static constexpr StrId standardNames[] = {StrId::STR_HW_BACK_LABEL, StrId::STR_HW_CONFIRM_LABEL,
+                                            StrId::STR_HW_LEFT_LABEL, StrId::STR_HW_RIGHT_LABEL};
+  static constexpr StrId onePageNames[] = {StrId::STR_HW_BACK_LABEL, StrId::STR_HW_ONEPAGE_LEFT_LABEL,
+                                           StrId::STR_HW_ONEPAGE_RIGHT_LABEL, StrId::STR_HW_ONEPAGE_CONFIRM_LABEL};
+  const auto buttons = MappedInputManager::frontButtonsInPhysicalOrder();
+  const auto* names = BoardConfig::isOnePage() ? onePageNames : standardNames;
+  for (size_t i = 0; i < buttons.size(); ++i) {
+    if (buttons[i] == buttonIndex) {
+      return I18N.get(names[i]);
+    }
   }
+  return "Unknown";
 }

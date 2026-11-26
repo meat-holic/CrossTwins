@@ -4,6 +4,7 @@
 #include <Epub/FootnoteEntry.h>
 #include <Epub/PageLink.h>
 #include <Epub/Section.h>
+#include <HalMemory.h>
 
 #include <atomic>
 #include <memory>
@@ -21,7 +22,13 @@
 #include "components/OptionPopup.h"
 
 class EpubReaderActivity final : public ReaderActivity {
+#ifdef BOARD_HAS_PSRAM
+  // Reused for this reader's lifetime; never consumes internal RAM.
+  HalMemory::PsramBuffer grayPlanes;
+  size_t grayPlaneCapacity = 0;
+#endif
   std::shared_ptr<Epub> epub;
+  std::unique_ptr<Epub::SyncMetadata> vocabularyMetadata;
   std::unique_ptr<Section> section = nullptr;
   int currentSpineIndex = 0;
   int nextPageNumber = 0;
@@ -42,7 +49,6 @@ class EpubReaderActivity final : public ReaderActivity {
   bool pendingSyncSaveError = false;
   uint8_t pageLoadRetryCount = 0;
   static constexpr uint8_t MAX_PAGE_LOAD_RETRIES = 3;
-  bool skipNextButtonCheck = false;
   bool automaticPageTurnActive = false;
   bool showBookmarkMessage = false;
   bool showDictionaryMessage = false;
@@ -55,6 +61,7 @@ class EpubReaderActivity final : public ReaderActivity {
   bool currentPageBookmarked = false;
   int idlePrewarmSpine = -1;
   int idlePrewarmPage = -1;
+  int idlePrewarmOffset = 0;
   unsigned long lastRenderCompleteMs = 0;
   bool bookmarkRemoved = false;
   std::vector<BookmarkEntry> cachedBookmarks;
@@ -128,6 +135,9 @@ class EpubReaderActivity final : public ReaderActivity {
   int lastSavedSpineIndex = -1;
   int lastSavedPage = -1;
   int lastSavedPageCount = -1;
+  // Chapter title shown in the status bar, cached per spine item.
+  mutable int statusTitleSpine = -1;
+  mutable std::string statusTitle;
 
   static constexpr int BUILD_PAGES_PER_CHUNK = 8;
   static constexpr int BACKGROUND_BUILD_PAGES_PER_TICK = 2;
@@ -140,7 +150,9 @@ class EpubReaderActivity final : public ReaderActivity {
   // One bounded build step on the loop task, in a frame whose input did nothing. Lays out about
   // BACKGROUND_BUILD_PAGES_PER_TICK pages (one 1 KB parse step may add more) and hands the loop
   // back as soon as a button is down, so a short press is seen before more pages are built.
-  void backgroundBuildTick();
+  // Returns true if a repaint was requested (caller should skip idle prewarm for this frame).
+  bool backgroundBuildTick();
+  void idlePrewarmTick();
   bool anyButtonPressed() const;
   // A background build failed in this spine. The error would likely recur, so from then on the
   // spine is built only as far as the reader goes; pages from earlier build steps stay readable.
@@ -198,6 +210,9 @@ class EpubReaderActivity final : public ReaderActivity {
   void activateMoreRow(int row);
   void openFootnoteSelect(bool reopenMenuOnCancel);
   void openDictionaryWordSelect();
+  // Selection to restore when returning from a dictionary lookup.
+  ClipSelectionActivity::Selection pendingLookupSelection;
+  ClipSelectionActivity::Selection lookupReturnSelection;
   void startClipSelection(int initialX = -1, int initialY = -1,
                           ClipSelectionActivity::Mode mode = ClipSelectionActivity::Mode::Clip);
   int clippingAtPoint(const Page& page, int x, int y) const;
@@ -215,7 +230,7 @@ class EpubReaderActivity final : public ReaderActivity {
 
   void renderContents(std::unique_ptr<Page> page, int orientedMarginTop, int orientedMarginRight,
                       int orientedMarginBottom, int orientedMarginLeft);
-  void drawClippingHighlights(const Page& page, int fontId, int orientedMarginTop, int orientedMarginLeft) const;
+  bool drawClippingHighlights(const Page& page, int fontId, int orientedMarginTop, int orientedMarginLeft) const;
   void renderStatusBar() const;
   void applyOrientation(uint8_t orientation);
   void applyInitialOrientation() override;
@@ -252,6 +267,7 @@ class EpubReaderActivity final : public ReaderActivity {
   ~EpubReaderActivity() override;
 
   void loop() override;
+  void prepareForSleep() override;
   void render(RenderLock&& lock) override;
 
   bool pageTurn(bool isForward) override;

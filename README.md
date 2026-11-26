@@ -4,9 +4,9 @@
 
 CrossTwins is a Korean-focused CrossPoint Reader firmware fork for supported e-readers. It keeps the reader open and hackable while restoring the CrossTwins logo, OTA update path, and release assets for this project.
 
-## CrossTwins 2.0.0
+## CrossTwins 2.1.0 RC1
 
-CrossTwins 2.0.0 is based on CrossPoint Reader 2.0.0 and keeps the Korean-first workflow developed for this fork. Features already present in the RC3 line include:
+CrossTwins 2.1.0 RC1 integrates CrossPoint Reader 2.1.0rc and keeps the Korean-first workflow developed for this fork. CrossTwins features include:
 
 - English and Korean UI, Pretendard UI font, CJK text handling, and user fonts loaded from the SD card.
 - EPUB paragraph indentation, wrapped long titles, natural sorting of numbered filenames, and next-book navigation.
@@ -18,7 +18,7 @@ Its home screen includes a sysinfo panel for free and largest contiguous default
 utilization), uptime, and the internal SoC temperature when supported; unsupported or failed temperature readings are
 marked unavailable.
 
-Firmware builds target X3/X4, X4 Pro, X4C, Sticky, PaperMono, Metalio E-Ink 4, eego A4, and Picco. Build support does not by itself confirm behavior on a physical device; release notes identify any device checks that were not performed.
+Official CrossTwins firmware assets cover X3/X4, X4 Pro, X4 Classic, Sticky, and Paper Mono. The source also has build profiles for Metalio E-Ink 4, EEGO A4, Picco, and OnePage. See the release notes for device validation.
 
 ### Build targets include:
 
@@ -62,12 +62,12 @@ Check [our Devices page](https://crosspointreader.com/devices) for the full list
   - WebDAV handler
   - AP mode (hotspot) and STA mode (join existing Wi-Fi), both with QR helpers
   - Calibre wireless connect flow
-  - OPDS browser with saved servers (up to 8), search, pagination, and direct download
+  - OPDS browser with saved servers (up to 8), search, pagination, and direct download; hold Back for one second and release in a catalog to return to the main menu
   - OTA update checks and installs from GitHub releases
 
 - **Customization**: night mode, multiple themes (Classic, Lyra, Lyra Extended, RoundedRaff, Gallaemok DOS, Minimal), sleep screen modes including transparent overlays, front/side button remapping, status bar controls including the Memory Monitor's free heap/largest-block diagnostics, power-button behavior, refresh cadence, and more. Minimal places recent-book details above a text menu, supports left/center/right menu alignment, and can display an optional SD-card BMP behind the center content.
 
-- **Localization**: 34 UI languages and counting, including CJK font fallback and RTL support.
+- **Localization**: English and Korean interface, with CJK fallback, RTL and Indic shaping for books using compatible fonts.
 
 - **SD card plugins**: install plugins for book catalogs, downloads, and tools in the device's web interface. Enable Plugins under Settings → Connectivity to show them on Home. On-device plugins use existing firmware screens and operations. JavaScript runs in a browser on your phone or computer, and its page must stay open while it works. Plugins follow [CrossPoint's reading-focused scope](SCOPE.md#out-of-scope). See the [plugin guide](docs/sd-plugins.md).
 

@@ -236,6 +236,15 @@ fields plus type-specific fields.
 curl http://crosspoint.local/api/settings
 ```
 
+`?keys=` takes a comma-separated list of setting keys, without spaces, and
+returns only those items in the same array format and in settings-list order.
+Unknown keys are ignored. A plugin that needs one or two settings should use it
+instead of reading the whole list.
+
+```bash
+curl 'http://crosspoint.local/api/settings?keys=koServerUrl,dictionaryName'
+```
+
 Example item:
 
 ```json
@@ -244,15 +253,15 @@ Example item:
   "name": "Reader Font Size",
   "category": "Reader",
   "type": "enum",
-  "value": 1,
-  "options": ["12 pt", "14 pt", "16 pt", "18 pt"]
+  "value": 0,
+  "options": ["10 pt"]
 }
 ```
 
 `value` is always an index into `options`, never the option's text. The
 `fontSize` options depend on the selected family. A `.cpfont` family installed
-at 10/12/14 pt offers those three sizes. TTF/OTF/TTC families offer the
-standard 12/14/16/18 pt sizes. The `fontFamily` and `dictionaryName` options
+at 10/12/14 pt offers those three sizes. Built-in Pretendard offers 10 pt.
+TTF/OTF/TTC families offer every whole size from 8 to 22 pt. The `fontFamily` and `dictionaryName` options
 also depend on the SD card contents.
 
 Types:
@@ -300,6 +309,7 @@ Response:
 ```json
 {
   "maxFamilies": 128,
+  "vectorFonts": false,
   "families": [
     {
       "name": "Literata",
@@ -494,6 +504,10 @@ Error messages include:
 
 Incomplete WebSocket uploads are deleted on disconnect or error.
 
+The server accepts two WebSocket connections at a time and closes further ones
+without a reply. It closes a connection that sends nothing for two minutes, which
+also deletes an unfinished upload.
+
 ## WebDAV
 
 The same HTTP server registers a WebDAV-compatible handler for file manager clients.
@@ -558,12 +572,15 @@ contracts are below. Outbound TLS is encrypted but the peer is not verified
 
 ### `GET /api/plugins`
 
-Installed plugins that ship a `plugin.js`:
-`[{"name":"<folder>","dir":"<root>/<folder>","title":"<title>","mount":"settings"}, ...]`.
-`dir` is where the plugin is installed (plugins keep their own files there);
-`title` and `mount` come from the plugin's `manifest.json` when present.
-Mount `settings` (the default) shows the card on the Plugins page (`/plugins`);
-mount `files` shows it in the File Manager.
+All installed plugins, including those without browser settings:
+`[{"name":"<folder>","dir":"<root>/<folder>","title":"<title>","mount":"settings","hasPluginJs":true}, ...]`.
+`dir` is the installed folder. `title`, `mount`, optional `version` and
+`author` are read from `manifest.json` and overridden by `device.json` when
+present. `hasPluginJs` tells browser hosts whether the plugin provides a script.
+The Plugins page (`/plugins`) lists every installed plugin and can jump to
+its section. Browser settings render there when `mount` is `settings`
+(the default); `files` plugins render in the File Manager. Native-only
+plugins have an informational card without loading a browser script.
 
 ### `GET /plugin?name=<plugin>&file=<file>`
 
@@ -585,11 +602,16 @@ to CORS). Body: `{"plugin":"<name>","method":"GET","url":"https://...","headers"
   as JSON `[["name","value"], ...]` in receive order, duplicates kept (every
   `Set-Cookie`). `api.relay()` resolves to `{status, headers, body}`.
 - **Redirects** are not followed: a 3xx comes back with its `location` header.
-- **Limits:** the upstream body is capped at 32KB; larger payloads belong on
-  `/api/fetch`.
+- **Limits:** the upstream body is capped at 64KB. The device forwards the body
+  as it arrives and does not store it. Use `/api/fetch` for large files. A GET
+  that fails with 502 can be retried with `/api/fetch` (`api.relay()` throws an
+  error whose `status` is 502).
 - **Errors:** `400 {"error":"missing plugin/url"}`; `502 {"error":"relay failed; ..."}`
-  for a transport failure, a truncated body, a body over the cap, or low memory
-  (the device log names which).
+  when the request fails before any of the body arrives, or the upstream
+  `Content-Length` is over the cap (the device log names which). If the `200`
+  has already started and the body is then cut short, or goes over the cap
+  without a `Content-Length`, the device closes the connection. `api.relay()`
+  reports that as the same 502 error.
 
 ### `POST /api/crypto`
 
@@ -647,7 +669,11 @@ plus optional `"method"` (`GET`, `POST`, `PUT`, `PATCH`, or `DELETE`; default
   `Authorization`) are sent only while the target keeps the starting URL's
   scheme, host, and port; a redirect elsewhere, including https→http, gets none.
 - For a GET without a body, an answer cut short mid-transfer resumes on its own
-  with a Range request.
+  with a Range request. If the server ignores Range and sends the whole body
+  again, the device rewrites the `.part` from that response. On a request with
+  `offset` above 0 it then ignores `maxBytes` and finishes the whole body, so
+  that request can be long; if the browser loses it, check whether `dest` was
+  installed.
 - **Segments:** `maxBytes` (at most 4MB) ends the request after that many
   bytes with `complete:false`; send the next request with `offset` set to the
   returned `bytes` to continue the same `.part`. `api.fetchToSd()` does this
@@ -667,7 +693,7 @@ plus optional `"method"` (`GET`, `POST`, `PUT`, `PATCH`, or `DELETE`; default
   `400 {"error":"offset and maxBytes need a GET without a body"}`;
   `409 {"error":"offset mismatch","bytes":N}`
   when `offset` does not match the `.part` size; `502 {"error":"sd write failed" |
-  "range unsupported" | "download truncated","bytes":N,"complete":false}`.
+  "download truncated","bytes":N,"complete":false}`.
 
 ### `POST /api/plugin-fs?plugin=<name>&path=<abs path>`
 
@@ -696,7 +722,8 @@ stores opaque `{plugin, action, args}` blobs (fixed 6-slot pool; args/result
 ```bash
 curl -X POST http://crosspoint.local/api/plugin-jobs \
   -d '{"plugin":"<name>","action":"<action>","args":{"path":"/Books/somefile"}}'
-# -> {"id":3}         (503 {"error":"job queue full"} when all slots busy)
+# -> {"id":3}         (503 {"error":"job queue full"} when all slots busy,
+#                      or {"error":"out of memory"} if the queue cannot be allocated)
 ```
 
 ### `GET /api/plugin-jobs/claim?plugin=<name>`

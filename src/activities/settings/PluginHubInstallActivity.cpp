@@ -102,7 +102,7 @@ HttpDownloader::DownloadError PluginHubInstallActivity::installPluginHub() {
   for (const char* filename : PLUGIN_HUB_FILES) {
     const std::string dest = pluginHubPath(filename);
     const std::string staged = dest + ".new";
-    if (!Storage.replaceFile(staged.c_str(), dest.c_str())) {
+    if (!Storage.replaceUserFile(staged.c_str(), dest.c_str())) {
       LOG_ERR("PHUB", "Install swap failed: %s", dest.c_str());
       cleanupStagedFiles();
       return HttpDownloader::FILE_ERROR;

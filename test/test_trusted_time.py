@@ -1,5 +1,6 @@
 """Compile TrustedTime against host stubs and check its timezone contract."""
 
+import os
 from pathlib import Path
 import subprocess
 import tempfile
@@ -10,9 +11,23 @@ ROOT = Path(__file__).resolve().parents[1]
 STUBS = {
     "Arduino.h": r'''
 #pragma once
+#ifdef _WIN32
+#define _TIMEVAL_DEFINED
+#endif
 #include <cstdlib>
 #include <ctime>
+#ifdef _WIN32
+// The host clock stays untouched, as it does on an unprivileged POSIX host.
+struct timeval { time_t tv_sec; long tv_usec; };
+inline int settimeofday(const timeval*, const void*) { return -1; }
+inline void setTimezone(const char* tz) { _putenv_s("TZ", tz); }
+#else
 #include <sys/time.h>
+inline void setTimezone(const char* tz) {
+  if (*tz) setenv("TZ", tz, 1);
+  else unsetenv("TZ");
+}
+#endif
 using portMUX_TYPE = int;
 #define portMUX_INITIALIZER_UNLOCKED 0
 #define portENTER_CRITICAL(lock) ((void)(lock))
@@ -26,8 +41,7 @@ inline void delay(unsigned long ms) { ticks += ms; }
 inline void configTzTime(const char* tz, const char*) {
   enabled = true;
   ++configurations;
-  setenv("TZ", tz, 1);
-  tzset();
+  setTimezone(tz);
 }
 ''',
     "Preferences.h": r'''
@@ -124,8 +138,7 @@ int main() {
   assert(storedFloor == rtcNow + 3600);
 
   const char* zone = "EST5EDT,M3.2.0,M11.1.0";
-  setenv("TZ", zone, 1);
-  tzset();
+  setTimezone(zone);
   trustedtime::startSync();
   assert(configurations == 1 && strcmp(getenv("TZ"), zone) == 0);
   trustedtime::startSync();
@@ -135,7 +148,7 @@ int main() {
   completed = false;
   assert(!trustedtime::syncNow(200));
   assert(strcmp(getenv("TZ"), zone) == 0);
-  unsetenv("TZ");
+  setTimezone("");
   enabled = false;
   trustedtime::startSync();
   assert(strcmp(getenv("TZ"), "UTC0") == 0);
@@ -149,11 +162,12 @@ if __name__ == "__main__":
         for name, content in STUBS.items():
             (work / name).write_text(content)
         (work / "check.cpp").write_text(CHECK)
+        executable = work / ("check.exe" if os.name == "nt" else "check")
         subprocess.run([
             "c++", "-std=c++17", "-Wall", "-Wextra", "-Werror",
             f"-I{work}", f"-I{ROOT / 'lib/TrustedTime'}",
             str(ROOT / "lib/TrustedTime/TrustedTime.cpp"), str(work / "check.cpp"),
-            "-o", str(work / "check"),
+            "-o", str(executable),
         ], check=True)
-        subprocess.run([str(work / "check")], check=True)
+        subprocess.run([str(executable)], check=True)
     print("TrustedTime clock and timezone checks passed")

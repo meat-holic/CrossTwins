@@ -8,6 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 source = (ROOT / "src/activities/reader/EpubReaderActivity.cpp").read_text()
 fill = "const auto fillHighlight =" + source.split("const auto fillHighlight =", 1)[1].split("\n  uint16_t pageWordIndex", 1)[0]
 render = "auto renderGrayscalePass =" + source.split("auto renderGrayscalePass =", 1)[1].split("\n\n  if (pageHasImagesNeedingDecode)", 1)[0]
+pair_condition = "grayPlanes && " + source.split("if (grayPlanes && ", 1)[1].split(") {", 1)[0]
 harness = r"""
 #include <cassert>
 #include <memory>
@@ -36,17 +37,35 @@ int main() {
       renderer.mode = mode;
       renderer.dots = renderer.ditherRects = 0;
       fillHighlight(1, 1, 4, 4);
-      assert(renderer.dots == (a4 && mode != GfxRenderer::BW ? 4u : 0u));
+      // A4 highlights are light gray: dots go in the MSB plane only.
+      assert(renderer.dots == (a4 && mode == GfxRenderer::GRAYSCALE_MSB ? 4u : 0u));
       assert(renderer.ditherRects == (a4 && mode != GfxRenderer::BW ? 0u : 1u));
     }
   }
   int order = 0;
   struct Page {
     int& order;
+    bool images = false;
+    bool hasImages() const { return images; }
     void render(GfxRenderer&, int, int, int) { assert(++order == 2); }
     void renderImages(GfxRenderer&, int, int, int) { assert(++order == 2); }
   };
   auto page = std::make_unique<Page>(order);
+  bool grayPlanes = true;
+  [[maybe_unused]] bool drewClippingHighlights = true;
+  auto usePairedPass = [&] { return """ + pair_condition + r"""; };
+  BoardConfig::a4 = true;
+  assert(!usePairedPass());
+  drewClippingHighlights = false;
+  assert(usePairedPass());
+  BoardConfig::a4 = false;
+  drewClippingHighlights = true;
+  assert(usePairedPass());
+  page->images = true;
+  assert(!usePairedPass());
+  page->images = false;
+  grayPlanes = false;
+  assert(!usePairedPass());
   const int fontId = 0, orientedMarginTop = 0, orientedMarginLeft = 0;
   const bool absoluteImageGrayscale = false;
   bool needsTextGrayscale = true;

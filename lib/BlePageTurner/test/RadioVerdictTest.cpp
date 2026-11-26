@@ -171,7 +171,7 @@ TEST(RadioVerdictTest, IdleRearmNeedsBookEntryOrConnectRequest) {
   EXPECT_FALSE(radioRearmWanted(false, false, false, false));
 }
 
-TEST(RadioReconnectPolicyTest, FirstRemotePolicyLeavesSdkBondRotationActive) {
+TEST(RadioReconnectPolicyTest, FirstRemotePolicyDoesNotRestrictReconnectToChosenBond) {
   EXPECT_FALSE(shouldArmSelectedPeerReconnect(1));
 }
 

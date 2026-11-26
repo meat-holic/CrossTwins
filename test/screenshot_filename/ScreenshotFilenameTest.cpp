@@ -17,9 +17,8 @@ TEST(ScreenshotFilename, EmptyDirectoryStartsAtOne) {
 }
 
 TEST(ScreenshotFilename, ExistingMaximumWinsAcrossGaps) {
-  const std::array<const char*, 5> names = {"screenshot_00001.bmp", "screenshot_00003.bmp",
-                                             "screenshot_00008.bmp", "screenshot-123456.bmp",
-                                             "book_p4_12pct_99.bmp"};
+  const std::array<const char*, 5> names = {"screenshot_00001.bmp", "screenshot_00003.bmp", "screenshot_00008.bmp",
+                                            "screenshot-123456.bmp", "book_p4_12pct_99.bmp"};
   uint64_t largest = 0;
   for (const char* name : names) ASSERT_TRUE(screenshot_filename::observeName(name, largest));
 
@@ -37,8 +36,7 @@ TEST(ScreenshotFilename, LegacyTimestampNamesAreIgnored) {
 
 TEST(ScreenshotFilename, MatchingRequiresAtLeastFiveDigitsAndLowercaseBmpSuffix) {
   uint64_t number = 0;
-  EXPECT_EQ(screenshot_filename::parseNumber("screenshot_00001.bmp", number),
-            screenshot_filename::ParseResult::Valid);
+  EXPECT_EQ(screenshot_filename::parseNumber("screenshot_00001.bmp", number), screenshot_filename::ParseResult::Valid);
   EXPECT_EQ(number, 1u);
   EXPECT_EQ(screenshot_filename::parseNumber("screenshot_1234.bmp", number),
             screenshot_filename::ParseResult::NotNumberedScreenshot);

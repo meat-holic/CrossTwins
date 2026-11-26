@@ -1,6 +1,7 @@
 #pragma once
 
 #include <SdCardFontRegistry.h>
+#include <VectorFontSupport.h>
 
 #include <cstdint>
 #include <string>
@@ -39,7 +40,17 @@ class TextSettingsActivity final : public UiTabListActivity {
     ScreenMargin,
     Count
   };
-  enum class StyleRow { FocusReading, BionicStrength, Hyphenation, EmbeddedStyle, AntiAliasing, Count };
+  enum class StyleRow {
+    FocusReading,
+    BionicStrength,
+    Hyphenation,
+    EmbeddedStyle,
+    AntiAliasing,
+#if CROSSPOINT_VECTOR_FONTS
+    PublisherFonts,  // option popup, not a checkbox
+#endif
+    Count
+  };
 
   // --- UiTabListActivity contract ---
   int listCount() const override;

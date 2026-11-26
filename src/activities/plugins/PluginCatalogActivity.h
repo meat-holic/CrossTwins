@@ -36,10 +36,9 @@ std::vector<PluginRef> discoverPlugins();
 // See docs/sd-plugins.md for the device.json schema.
 class PluginCatalogActivity final : public CatalogActivity {
  public:
-  // showOpds adds the OPDS row; rootMode returns Home instead of popping to Settings.
+  // rootMode returns Home instead of popping to Settings.
   // Out-of-line construction/destruction needs the complete SecureHttpClient type.
-  explicit PluginCatalogActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, bool showOpds = false,
-                                 bool rootMode = false);
+  explicit PluginCatalogActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, bool rootMode = false);
   ~PluginCatalogActivity() override;
 
   void onEnter() override;
@@ -79,6 +78,7 @@ class PluginCatalogActivity final : public CatalogActivity {
       std::string title, url, body;
       std::string id;  // fills {list_id}, so lists can share one browse url
       std::string noticeTitle, noticeMessage, noticeConfirm, noticeCancel;
+      std::string noticeId;  // nonempty only for valid notice.id with notice.once=true
       bool hasNotice() const { return !noticeMessage.empty(); }
     };
     std::vector<BrowseList> browseLists;
@@ -144,9 +144,9 @@ class PluginCatalogActivity final : public CatalogActivity {
   bool showPluginHubInstallRow = false;
   bool ignoreHubInstallerBackRelease = false;
   OptionPopup pluginHubPopup;
-  bool showOpds = false;
   bool rootMode = false;
   std::string pickerReturnName;  // plugin identity to reselect after leaving a catalog
+  std::string downloadFailure;   // shown after "Download failed", e.g. "HTTP 404"
   std::vector<Item> items;
   // Row buffer over items/browseLists plus the synthetic pager rows; rebuilt
   // lazily on the render task whenever rowsDirty (items or state changed).
@@ -229,6 +229,7 @@ class PluginCatalogActivity final : public CatalogActivity {
   // Read installed versions once per page, outside the render path.
   void computeInstallStatus();
   bool parseXmlList();
+  bool parseUpdateFirstBrowseResponse(size_t pageOffset);
   bool parseBrowseResponse();
   void activateItem(int itemIndex);  // XML list: navigate into a folder, else show details/download
   bool loadItemDetails(int itemIndex, ItemDetails& details);
@@ -236,6 +237,7 @@ class PluginCatalogActivity final : public CatalogActivity {
   void downloadItem(int itemIndex);
   HttpDownloader::DownloadError downloadBundle(const Item& item);
   HttpDownloader::DownloadError downloadBook(const Item& item);
+  void noteFileFailure();
   void beginAuth();
   void pollAuth();
   bool refreshCredentialToken();  // password grant: mint a token from config creds

@@ -1,9 +1,11 @@
 #include "ParsedText.h"
 
 #include <BidiUtils.h>
+#include <ComplexShaper.h>
 #include <GfxRenderer.h>
 #include <Logging.h>
 #include <Memory.h>
+#include <TextScan.h>
 #include <Utf8.h>
 
 #include <algorithm>
@@ -32,14 +34,6 @@ constexpr size_t RTL_PARAGRAPH_PROBE_WORDS = 3;
 // before giving up. 64 is a hedge for pathological cases like long numeric tokens.
 constexpr int RTL_PER_WORD_PROBE_DEPTH = 64;
 constexpr size_t MIN_JUSTIFY_GAPS = 1;
-
-// Byte-level pre-check: Hebrew UTF-8 lead bytes 0xD6-0xD7, Arabic/Syriac 0xD8-0xDB.
-bool mayContainRtlBytes(const char* str) {
-  for (const auto* p = reinterpret_cast<const unsigned char*>(str); *p; ++p) {
-    if (*p >= 0xD6 && *p <= 0xDB) return true;
-  }
-  return false;
-}
 
 // Returns the first rendered codepoint of a word (skipping leading soft hyphens).
 uint32_t firstCodepoint(const std::string_view word) {
@@ -475,8 +469,10 @@ void ParsedText::addWord(std::string word, const EpdFontFamily::Style fontStyle,
   if (underline) {
     baseStyle = static_cast<EpdFontFamily::Style>(baseStyle | EpdFontFamily::UNDERLINE);
   }
-  const bool wordStartsRtl = !hasRtlWord && mayContainRtlBytes(word.c_str()) &&
-                             BidiUtils::startsWithRtl(word.c_str(), RTL_PER_WORD_PROBE_DEPTH);
+  const Utf8TextScan scan = utf8ScanText(word.c_str());
+  hasComplexWord = hasComplexWord || scan.complexScript;
+  const bool wordStartsRtl =
+      !hasRtlWord && scan.rtl && BidiUtils::startsWithRtl(word.c_str(), RTL_PER_WORD_PROBE_DEPTH);
 
   // All token pushes funnel through here: the arena append is the only
   // fallible step, and a failed append drops the token without touching the
@@ -586,8 +582,8 @@ void ParsedText::addWord(std::string word, const EpdFontFamily::Style fontStyle,
     return;
   }
 
-  // Preserve author styling and incomplete inline words without adding automatic emphasis.
-  if (!focusEligible) {
+  // Keep emphasis off for incomplete words, author-bold text and words shaped as a whole.
+  if (!focusEligible || scan.complexScript) {
     if (auto breakOffsets = explicitHyphenBreakByteOffsets(word, effectiveAttachToPrevious); !breakOffsets.empty()) {
       ensureTokenCapacity(breakOffsets.size() + 1);
       bool firstToken = true;
@@ -624,9 +620,9 @@ void ParsedText::addWord(std::string word, const EpdFontFamily::Style fontStyle,
   // Reserve actual segments, so three-byte Hangul does not inflate parallel arrays.
   size_t segmentCount = 0;
   bool previousWord = false;
-  const auto* scan = reinterpret_cast<const unsigned char*>(word.c_str());
-  while (*scan) {
-    const bool currentWord = isWordCharacter(utf8NextCodepoint(&scan));
+  const auto* segmentCursor = reinterpret_cast<const unsigned char*>(word.c_str());
+  while (*segmentCursor) {
+    const bool currentWord = isWordCharacter(utf8NextCodepoint(&segmentCursor));
     if (segmentCount == 0 || currentWord != previousWord) ++segmentCount;
     previousWord = currentWord;
   }
@@ -661,9 +657,8 @@ void ParsedText::addWord(std::string word, const EpdFontFamily::Style fontStyle,
       // default stage; Korean words use the new rounded-up ratio at every strength.
       const size_t percent = 20 + 5 * std::min<uint8_t>(bionicReadingStage, 5);
       const bool koreanWord = containsHangul(segment);
-      size_t targetBoldChars = !koreanWord && bionicReadingStage >= 5
-                                   ? (charCount * 45) / 100
-                                   : (charCount * percent + 99) / 100;
+      size_t targetBoldChars =
+          !koreanWord && bionicReadingStage >= 5 ? (charCount * 45) / 100 : (charCount * percent + 99) / 100;
       targetBoldChars = std::clamp<size_t>(targetBoldChars, 1, 9);
 
       if (targetBoldChars >= charCount) {
@@ -796,6 +791,9 @@ void ParsedText::layoutAndExtractLines(const GfxRenderer& renderer, const int fo
   if (words.empty() || maxLines == 0 || (stopRequested && *stopRequested)) {
     return;
   }
+  // Measuring words and flattening lines both shape complex-script runs; the
+  // memo makes the second pass reuse the first.
+  const GfxRenderer::ShapingMemoScope shapingMemo(hasComplexWord);
   // Stamped here rather than at construction: the parser replaces blockStyle as CSS resolves.
   blockStyle.characterSpacing = characterSpacing;
   this->wordSpacingPercent = wordSpacingPercent;
@@ -992,14 +990,19 @@ int ParsedText::wordFontId(const size_t wordIndex, const int blockFontId) const 
   return slot == 0 || sizeSlotFontIds[slot] == 0 ? blockFontId : sizeSlotFontIds[slot];
 }
 
-uint8_t ParsedText::sizeSlotFor(const float scale) {
+uint8_t ParsedText::sizeSlotFor(const float scale, const uint32_t family) {
+  // Once the slots run out, prefer the nearest size in the same family.
   uint8_t nearest = 1;
+  const auto distance = [&](const uint8_t slot) {
+    return std::fabs(sizeSlotScales[slot] - scale) + (sizeSlotFamilies[slot] == family ? 0.0f : 100.0f);
+  };
   for (uint8_t slot = 1; slot < sizeSlotCount; ++slot) {
-    if (std::fabs(sizeSlotScales[slot] - scale) < 0.01f) return slot;
-    if (std::fabs(sizeSlotScales[slot] - scale) < std::fabs(sizeSlotScales[nearest] - scale)) nearest = slot;
+    if (sizeSlotFamilies[slot] == family && std::fabs(sizeSlotScales[slot] - scale) < 0.01f) return slot;
+    if (distance(slot) < distance(nearest)) nearest = slot;
   }
   if (sizeSlotCount < MAX_SIZE_SLOTS) {
     sizeSlotScales[sizeSlotCount] = scale;
+    sizeSlotFamilies[sizeSlotCount] = family;
     return sizeSlotCount++;
   }
   return nearest;
@@ -1507,8 +1510,9 @@ void ParsedText::extractLine(const size_t breakIndex, const int pageWidth, const
 
   const int firstLineIndent = resolveFirstLineIndent(breakIndex == 0, renderer, fontId);
 
-  std::vector<std::string> lineRubyTexts(lineWordCount);
+  std::vector<std::string> lineRubyTexts;
   if (!rubyTexts.empty() && lastBreakAt < rubyTexts.size()) {
+    lineRubyTexts.resize(lineWordCount);
     const size_t copyCount = std::min(lineBreak, rubyTexts.size()) - lastBreakAt;
     std::copy(rubyTexts.begin() + lastBreakAt, rubyTexts.begin() + lastBreakAt + copyCount, lineRubyTexts.begin());
   }
@@ -1852,6 +1856,31 @@ void ParsedText::extractLine(const size_t breakIndex, const int pageWidth, const
     }
   }
 
+  // Complex-script words keep the form they were measured in (shaped, via
+  // this layout's shaping memo) in the page cache, so page turns draw exactly
+  // that without shaping. Empty when the line has none. A form that does not
+  // fill the word's measured width (this pass shaped differently, e.g. the
+  // memo was full and memory ran short; or ruby widened the slot) is dropped,
+  // and the word resolves when drawn.
+  std::vector<std::string> lineDisplay;
+  for (size_t i = 0; hasComplexWord && i < lineWordCount; i++) {
+    if (!ComplexShaper::containsComplexScript(lineWords[i].c_str())) continue;
+    if (lineDisplay.empty()) lineDisplay.resize(lineWordCount);
+    std::string& form = lineDisplay[i];
+    // The font and style layout measured the word in.
+    const size_t logical = lastBreakAt + (willReorder ? visualOrderScratch[i] : i);
+    const int wordFont = wordFontId(logical, fontId);
+    const EpdFontFamily::Style wordStyle = getWordStyleAt(logical);
+    if (!renderer.resolveForDisplay(wordFont, lineWords[i].c_str(), wordStyle, form)) continue;
+    const int measured = willReorder ? reorderedWidthsScratch[i] : wordWidths[lastBreakAt + i];
+    const int formWidth = renderer.getTextAdvanceX(
+        wordFont, GfxRenderer::LaidOutText{lineWords[i].c_str(), form.c_str()}, wordStyle, blockStyle.characterSpacing);
+    if (formWidth != measured) {
+      LOG_DBG("PTX", "Display form measures %d px, layout %d px: resolved when drawn", formWidth, measured);
+      form.clear();
+    }
+  }
+
   // Lines mixing sizes or using small caps carry per-word fonts; slots resolving to the block
   // font collapse to 0.
   const auto attachWordFonts = [&](TextBlock& block) {
@@ -1909,7 +1938,7 @@ void ParsedText::extractLine(const size_t breakIndex, const int pageWidth, const
     // TextBlock flattens the vectors into its arena; they stay owned here and die at return.
     auto block = makeUniqueNoThrow<TextBlock>(lineWords, lineXPos, lineWordStyles, std::vector<uint8_t>{},
                                               std::vector<uint16_t>{}, blockStyle, std::move(lineRubyTexts),
-                                              std::move(lineLinks), sourceRanges, paragraphStartWord);
+                                              std::move(lineLinks), sourceRanges, paragraphStartWord, lineDisplay);
     if (!block || !block->valid() || !attachWordFonts(*block)) {
       LOG_ERR("PTX", "Dropping line: TextBlock or arena allocation failed");
       // Latch through the same flag as addWord() OOM: the caller releases the
@@ -1941,9 +1970,9 @@ void ParsedText::extractLine(const size_t breakIndex, const int pageWidth, const
                                                                   blockStyle.characterSpacing));
   }
 
-  auto block =
-      makeUniqueNoThrow<TextBlock>(lineWords, lineXPos, lineWordStyles, outBoundaries, outSplitX, blockStyle,
-                                   std::move(lineRubyTexts), std::move(lineLinks), sourceRanges, paragraphStartWord);
+  auto block = makeUniqueNoThrow<TextBlock>(lineWords, lineXPos, lineWordStyles, outBoundaries, outSplitX, blockStyle,
+                                            std::move(lineRubyTexts), std::move(lineLinks), sourceRanges,
+                                            paragraphStartWord, lineDisplay);
   if (!block || !block->valid() || !attachWordFonts(*block)) {
     LOG_ERR("PTX", "Dropping line: TextBlock or arena allocation failed");
     droppedWords = true;  // see the non-focus branch above

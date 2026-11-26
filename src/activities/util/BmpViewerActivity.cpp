@@ -19,6 +19,7 @@
 #include "activities/util/IntervalSelectionActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "util/BookCacheUtils.h"
 
 namespace {
 constexpr char CUSTOM_SLEEP_ROOT_BMP[] = "/sleep.bmp";
@@ -200,6 +201,7 @@ bool BmpViewerActivity::renderImage() {
 
 void BmpViewerActivity::onEnter() {
   Activity::onEnter();
+  RenderLock lock;
 
   if (siblingImages.empty() && !filePath.empty()) {
     loadSiblingImages();
@@ -437,7 +439,7 @@ bool BmpViewerActivity::saveJpegSleepCover() {
     LOG_ERR("BMP", "Failed to close sleep image");
     return false;
   }
-  if (!Storage.replaceFile(CUSTOM_SLEEP_TMP_BMP, CUSTOM_SLEEP_ROOT_BMP)) {
+  if (!Storage.replaceUserFile(CUSTOM_SLEEP_TMP_BMP, CUSTOM_SLEEP_ROOT_BMP)) {
     // ponytail: FAT replacement is not atomic; keep the complete temp for recovery.
     keepBmpTemp = true;
     LOG_ERR("BMP", "Failed to publish sleep image");
@@ -447,6 +449,7 @@ bool BmpViewerActivity::saveJpegSleepCover() {
 }
 
 void BmpViewerActivity::doSetSleepCover() {
+  RenderLock lock;
   GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
 
   const bool jpeg = FsHelpers::hasJpgExtension(filePath);
@@ -479,14 +482,15 @@ void BmpViewerActivity::doSetSleepCover() {
           }
         }
         if (bytesRead < 0) success = false;
-        outFile.close();
-        success = success && Storage.replaceFile(tmp.c_str(), destination);
+        const bool closed = outFile.close();
+        success = success && closed && Storage.replaceUserFile(tmp.c_str(), destination);
         if (!success) Storage.remove(tmp.c_str());
       }
     }
   }
 
   if (success) {
+    sleepImageChanged(destination);
     if (!transparentMode) SETTINGS.sleepScreen = CrossPointSettings::SLEEP_SCREEN_MODE::CUSTOM;
     SETTINGS.saveToFile();
     GUI.drawPopup(renderer, tr(STR_DONE));
@@ -495,6 +499,7 @@ void BmpViewerActivity::doSetSleepCover() {
   }
 
   delay(1000);
+  lock.unlock();
   onEnter();
 }
 
@@ -550,6 +555,7 @@ void BmpViewerActivity::openIntervalPicker() {
 
 void BmpViewerActivity::loop() {
   Activity::loop();
+  RenderLock lock;
 
   if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
     if (slideshowActive) {

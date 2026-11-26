@@ -2,6 +2,7 @@
 
 #include <BitmapHelpers.h>
 #include <BmpToBmpConverter.h>
+#include <BoardConfig.h>
 #include <Epub.h>
 #include <Epub/converters/PngToFramebufferConverter.h>
 #include <FontCacheManager.h>
@@ -552,8 +553,8 @@ bool selectRandomSleepFile(const char* firstDirPath, const char* secondDirPath, 
   if (lcgIndexesLeft == 0 || lcgIndexesTotal != fileCount || lcgIndexesLeft > fileCount || lcgState >= lcgM) {
     uint16_t previousIndexes[CrossPointState::SLEEP_AVOID_REPEAT_LOOKBACK];
     uint8_t previousCount = 0;
-    const uint8_t window = static_cast<uint8_t>(
-        std::min<uint16_t>(fileCount - 1, CrossPointState::SLEEP_AVOID_REPEAT_LOOKBACK));
+    const uint8_t window =
+        static_cast<uint8_t>(std::min<uint16_t>(fileCount - 1, CrossPointState::SLEEP_AVOID_REPEAT_LOOKBACK));
     if (lcgIndexesLeft == 0 && lcgIndexesTotal == fileCount && lcgState < fileCount) {
       // Invert the completed cycle (5 * 0xCCCCCCCD = 1 mod 2^32) to obtain recently shown image indexes
       static constexpr uint32_t LCG_MULTIPLIER_INVERSE = 0xCCCCCCCDu;
@@ -736,6 +737,13 @@ void SleepActivity::onEnter() {
     GUI.drawPopup(renderer, tr(STR_ENTERING_SLEEP));
   }
 
+  // Every mode below replaces the whole screen. One clean straight to the new
+  // image leaves the old screen visible, so clean to white first (BLANK is that clean).
+  if (SETTINGS.sleepScreen != CrossPointSettings::SLEEP_SCREEN_MODE::BLANK) {
+    renderer.clearScreen();
+    renderer.displayBuffer(kSleepClean);
+  }
+
   switch (SETTINGS.sleepScreen) {
     case (CrossPointSettings::SLEEP_SCREEN_MODE::BLANK):
       return renderBlankSleepScreen();
@@ -763,37 +771,40 @@ bool SleepActivity::renderCustomSleepBmp(const std::string& path) const {
 
   const bool thresholds = useOriginalCoverThresholds(renderer);
   const bool screenReady = source.getWidth() == renderer.getScreenWidth() &&
-                           source.getHeight() == renderer.getScreenHeight() && source.getBpp() <= 2;
-  if (!screenReady) {
-    // Like book covers: scale and dither once into a cached screen-sized BMP, then draw it without dithering.
-    const bool crop = SETTINGS.sleepScreenCoverMode == CrossPointSettings::SLEEP_SCREEN_COVER_MODE::CROP;
-    // Same-sized BMPs share a byte count, so the key also needs the modification time.
-    const std::string key = path + '|' + std::to_string(file.size()) + '|' + std::to_string(file.modificationTime()) +
-                            '|' + std::to_string(renderer.getScreenWidth()) + 'x' +
-                            std::to_string(renderer.getScreenHeight()) + (crop ? "|c" : "|f") +
-                            (thresholds ? "|t" : "");
-    const std::string cachePath = "/.crosspoint/sleep_" + std::to_string(std::hash<std::string>{}(key)) + ".bmp";
-    if (!Storage.exists(cachePath.c_str())) {
-      const std::string tmpPath = cachePath + ".tmp";
-      HalFile out;
-      bool ok = Storage.openFileForWrite("SLP", tmpPath, out) &&
-                BmpToBmpConverter::bmpFileToBmpStream(file, out, crop, thresholds);
-      if (out.isOpen()) ok = out.close() && ok;
-      ok = ok && Storage.rename(tmpPath.c_str(), cachePath.c_str());
-      if (!ok) Storage.remove(tmpPath.c_str());
-    }
-    HalFile cached;
-    if (Storage.openFileForRead("SLP", cachePath, cached)) {
-      Bitmap bitmap(cached);
-      if (bitmap.parseHeaders() == BmpReaderError::Ok) {
-        renderBitmapSleepScreen(bitmap);
-        return true;
-      }
-      cached.close();
-      Storage.remove(cachePath.c_str());
-    }
-    LOG_ERR("SLP", "Sleep image conversion failed; drawing %s directly", path.c_str());
+                           source.getHeight() == renderer.getScreenHeight() && source.hasNativePalette();
+  if (screenReady) {
+    renderBitmapSleepScreen(source);
+    return true;
   }
+
+  // Like book covers: scale and dither once into a cached screen-sized BMP, then draw it without dithering.
+  const bool crop = SETTINGS.sleepScreenCoverMode == CrossPointSettings::SLEEP_SCREEN_COVER_MODE::CROP;
+  // Same-sized BMPs share a byte count, so the key includes mtime; |n avoids reusing old dithered caches.
+  const std::string key = path + '|' + std::to_string(file.size()) + '|' + std::to_string(file.modificationTime()) +
+                          '|' + std::to_string(renderer.getScreenWidth()) + 'x' +
+                          std::to_string(renderer.getScreenHeight()) + (crop ? "|c" : "|f") + (thresholds ? "|t" : "") +
+                          (source.hasNativePalette() ? "|n" : "");
+  const std::string cachePath = "/.crosspoint/sleep_" + std::to_string(std::hash<std::string>{}(key)) + ".bmp";
+  if (!Storage.exists(cachePath.c_str())) {
+    const std::string tmpPath = cachePath + ".tmp";
+    HalFile out;
+    bool ok = Storage.openFileForWrite("SLP", tmpPath, out) &&
+              BmpToBmpConverter::bmpFileToBmpStream(file, out, crop, thresholds);
+    if (out.isOpen()) ok = out.close() && ok;
+    ok = ok && Storage.rename(tmpPath.c_str(), cachePath.c_str());
+    if (!ok) Storage.remove(tmpPath.c_str());
+  }
+  HalFile cached;
+  if (Storage.openFileForRead("SLP", cachePath, cached)) {
+    Bitmap bitmap(cached);
+    if (bitmap.parseHeaders() == BmpReaderError::Ok) {
+      renderBitmapSleepScreen(bitmap);
+      return true;
+    }
+    cached.close();
+    Storage.remove(cachePath.c_str());
+  }
+  LOG_ERR("SLP", "Sleep image conversion failed; drawing %s directly", path.c_str());
 
   Bitmap bitmap(file, true, thresholds);
   if (bitmap.parseHeaders() != BmpReaderError::Ok) return false;
@@ -815,10 +826,9 @@ void SleepActivity::renderCustomSleepScreen() const {
   renderDefaultSleepScreen();
 }
 
-// Sleep screens paint with a single HALF refresh (stock parity): the OEM X4
-// firmware's only clean refresh in normal operation is the single-pass 0xD7
-// sequence, used once for the sleep image. It never runs the multi-flash GC
-// waveform (0xF7) that FULL_REFRESH selects (#2471's blinking complaint).
+// Sleep screens paint with kSleepClean (after the white clean in onEnter): HALF, not
+// the multi-flash GC waveform (0xF7) that FULL_REFRESH selects (#2471's blinking
+// complaint), except on Metalio.
 void SleepActivity::renderDefaultSleepScreen() const {
   const auto pageWidth = renderer.getScreenWidth();
   const auto pageHeight = renderer.getScreenHeight();
@@ -880,7 +890,11 @@ void SleepActivity::renderBitmapSleepScreen(const Bitmap& bitmap, const bool pre
     return;
   }
   if (absolute) {
-    cleanBeforeAbsoluteGray(renderer);
+    // Full-screen modes already cleaned to white in onEnter; Cover + Transparent
+    // skips that clean, so its plain-cover fallback cleans here.
+    if (preserveBackground || SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::COVER_TRANSPARENT) {
+      cleanBeforeAbsoluteGray(renderer);
+    }
     if (!renderer.displayGrayscaleBase(sleepGrayscaleMode(renderer))) return;
   } else if (hasGreyscale) {
     // OEM grayscale pipeline base. Must stay HALF: the gray nudge LUT is
@@ -1100,8 +1114,16 @@ void SleepActivity::renderCoverSleepScreen() const {
 }
 
 void SleepActivity::renderLastScreenSleepScreen() const {
-  const auto pageHeight = renderer.getScreenHeight();
-  renderer.drawImage(MoonIcon, 0, pageHeight - MOONICON_HEIGHT, MOONICON_WIDTH, MOONICON_HEIGHT);
+  int top, right, bottom, left;
+  renderer.getOrientedViewableTRBL(&top, &right, &bottom, &left);
+  // Clear the rounded bottom corner too: how far its arc cuts in at the icon's bottom row.
+  const int radius = BoardConfig::ACTIVE.bottomCornerRadius != 0 ? BoardConfig::ACTIVE.bottomCornerRadius
+                                                                 : BoardConfig::ACTIVE.cornerRadius;
+  const int d = std::max(0, radius - bottom);
+  const int intrusion =
+      radius > 0 ? static_cast<int>(std::ceil(radius - std::sqrt(static_cast<float>(radius * radius - d * d)))) : 0;
+  renderer.drawImage(MoonIcon, std::max(left, intrusion), renderer.getScreenHeight() - bottom - MOONICON_HEIGHT,
+                     MOONICON_WIDTH, MOONICON_HEIGHT);
   // Only the moon differs from the displayed frame, so a differential FAST
   // update adds it without the flashing clean pass (which sweeps the panel
   // through the inverse — a full white flash on a night-mode page).

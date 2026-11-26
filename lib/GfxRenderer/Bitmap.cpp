@@ -136,6 +136,8 @@ BmpReaderError Bitmap::parseHeaders() {
   rowBytes = (width * bpp + 31) / 32 * 4;
 
   for (int i = 0; i < 256; i++) paletteLum[i] = static_cast<uint8_t>(i);
+  // The palette follows the DIB header, which is longer than 40 bytes for V4/V5 files.
+  if (colorsUsed > 0 && !file.seek(14 + biSize)) return BmpReaderError::SeekPixelDataFailed;
   if (colorsUsed > 0) {
     for (uint32_t i = 0; i < colorsUsed; i++) {
       uint8_t rgb[4];
@@ -152,7 +154,7 @@ BmpReaderError Bitmap::parseHeaders() {
   // Native levels are 0, 85, 170, 255 — i.e. values where (lum >> 6) is lossless.
   // If all palette entries are near a native level, we can skip dithering entirely.
   nativePalette = bpp <= 2;  // 1-bit and 2-bit are always native
-  if (!nativePalette && colorsUsed > 0) {
+  if (!nativePalette && bpp <= 8 && colorsUsed > 0) {
     nativePalette = true;
     for (uint32_t i = 0; i < colorsUsed; i++) {
       const uint8_t lum = paletteLum[i];

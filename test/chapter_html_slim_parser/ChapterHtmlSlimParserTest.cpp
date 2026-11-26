@@ -9,6 +9,7 @@
 #include <array>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <functional>
 #include <memory>
 #include <set>
@@ -20,6 +21,7 @@
 #include "src/activities/settings/TextSettingsPreview.h"
 #include "src/clippings/ClippingText.h"
 #include "src/util/ParagraphIndentMigration.h"
+#include "test/ScopedTempDir.h"
 
 #define class struct
 #define private public
@@ -83,15 +85,14 @@ class ChapterHtmlSlimParserTest : public ::testing::TestWithParam<const char*> {
   // clipping does: '\n' at a paragraph start, ' ' across a source gap, nothing otherwise.
   std::string parseToParagraphText(const std::string& body) {
     const std::string html = "<html><body>" + body + "</body></html>";
-    const std::string testId = std::to_string(std::hash<std::string>{}(html));
-    const auto tempDir = std::filesystem::temp_directory_path();
-    filepath = (tempDir / ("crosspoint-clipping-paragraphs-" + testId + ".xhtml")).string();
+    const ScopedTempDir tempDir;
+    filepath = (tempDir.path() / "clipping-paragraphs.xhtml").string();
     {
       HalFile file;
       EXPECT_TRUE(file.open(filepath.c_str(), "wb"));
       EXPECT_EQ(file.write(html.data(), html.size()), html.size());
     }
-    const auto cachePath = (tempDir / ("crosspoint-clipping-paragraphs-" + testId + ".bin")).string();
+    const auto cachePath = (tempDir.path() / "clipping-paragraphs.bin").string();
     std::string selected;
     uint32_t previousEnd = 0;
     bool paragraphStartPending = false;
@@ -122,8 +123,6 @@ class ChapterHtmlSlimParserTest : public ::testing::TestWithParam<const char*> {
     };
     parser.paragraphIndentSpaces = 0;
     EXPECT_TRUE(parser.parseAndBuildPages());
-    std::filesystem::remove(filepath);
-    std::filesystem::remove(cachePath);
     return selected;
   }
 };
@@ -181,8 +180,8 @@ TEST_F(ChapterHtmlSlimParserTest, StreamsGifDimensionsWithoutExtractingPayload) 
   parser.epub = std::make_shared<Epub>();
   parser.epub->imageBytes = {'G', 'I', 'F', '8', '9', 'a', 1, 0, 1, 0};
   parser.imageRendering = 0;
-  const auto imagePath = std::filesystem::temp_directory_path() / "crosspoint-gif-probe-0.gif";
-  std::filesystem::remove(imagePath);
+  const ScopedTempDir tempDir;
+  const auto imagePath = tempDir.path() / "gif-probe-0.gif";
   parser.imageBasePath = imagePath.string().substr(0, imagePath.string().size() - 5);
   Epub::enableGifProbeForTest = true;
   const char* attrs[] = {"src", "probe.gif", nullptr};
@@ -191,7 +190,6 @@ TEST_F(ChapterHtmlSlimParserTest, StreamsGifDimensionsWithoutExtractingPayload) 
   EXPECT_EQ(parser.epub->headerProbes, 1u);
   EXPECT_EQ(parser.epub->fullExtractions, 0u);
   EXPECT_FALSE(std::filesystem::exists(imagePath));
-  std::filesystem::remove(imagePath);
 }
 
 TEST_F(ChapterHtmlSlimParserTest, AbandonedLayoutStopsExtractingLines) {
@@ -212,12 +210,11 @@ TEST_F(ChapterHtmlSlimParserTest, AbandonedLayoutStopsExtractingLines) {
 class ParserStopTest : public ChapterHtmlSlimParserTest {};
 
 TEST_P(ParserStopTest, PageCallbackStopsParsingAndClosesFile) {
-  std::string testName = testing::UnitTest::GetInstance()->current_test_info()->name();
-  std::replace(testName.begin(), testName.end(), '/', '-');
-  filepath = (std::filesystem::temp_directory_path() / ("crosspoint-parser-stop-" + testName + ".xhtml")).string();
   std::string html = "<html><body>";
   for (int i = 0; i < 100; ++i) html += GetParam();
   html += "</body></html>";
+  const ScopedTempDir tempDir;
+  filepath = (tempDir.path() / "parser-stop.xhtml").string();
   {
     HalFile file;
     ASSERT_TRUE(file.open(filepath.c_str(), "wb"));
@@ -239,7 +236,6 @@ TEST_P(ParserStopTest, PageCallbackStopsParsingAndClosesFile) {
   EXPECT_EQ(renderer.fontPreparations, fontPreparationsAtStop);
   EXPECT_EQ(parser.xmlParser_, nullptr);
   EXPECT_FALSE(parser.parseFile_.isOpen());
-  std::filesystem::remove(filepath);
 }
 
 INSTANTIATE_TEST_SUITE_P(
@@ -332,21 +328,22 @@ TEST_F(ChapterHtmlSlimParserTest, UnequalTableCellsAndRubySurvivePageBreaks) {
 TEST(ReaderFontSizes, BuiltinVariantsStayInFamilyAndRespectSizeBounds) {
   ASSERT_EQ(std::size(BUILTIN_READER_POINT_SIZES), 1u);
   EXPECT_EQ(BUILTIN_READER_POINT_SIZES[0], 10);
-  EXPECT_EQ(builtinReaderFontVariant(UI_FONT_ID, 1.0f), UI_FONT_ID);
-  EXPECT_EQ(builtinReaderFontVariant(UI_FONT_ID, 0.5f), UI_FONT_ID);
-  EXPECT_EQ(builtinReaderFontVariant(UI_FONT_ID, 3.0f), UI_FONT_ID);
+  EXPECT_EQ(builtinReaderFontVariant(UI_FONT_ID, 1.0f), 0);
+  EXPECT_EQ(builtinReaderFontVariant(BUILTIN_READER_FONT_ID, 1.0f), BUILTIN_READER_FONT_ID);
+  EXPECT_EQ(builtinReaderFontVariant(BUILTIN_READER_FONT_ID, 0.5f), BUILTIN_READER_FONT_ID);
+  EXPECT_EQ(builtinReaderFontVariant(BUILTIN_READER_FONT_ID, 3.0f), BUILTIN_READER_FONT_ID);
   EXPECT_EQ(builtinReaderFontVariant(12345, 2.0f), 0);
 }
 
 TEST_F(ChapterHtmlSlimParserTest, BlockFontScaleUsesProviderAndFallsBackToBodyFont) {
   installBuiltinVariants(renderer);
-  renderer.fontMap.emplace(UI_FONT_ID, EpdFontFamily(10, nullptr));
-  parser.fontId = UI_FONT_ID;
-  EXPECT_EQ(parser.fontIdForScale(1.0f), UI_FONT_ID);
-  EXPECT_EQ(parser.fontIdForScale(2.0f), UI_FONT_ID);
-  EXPECT_EQ(parser.fontIdForScale(0.5f), UI_FONT_ID);
-  EXPECT_EQ(parser.fontIdForScale(0.96f), UI_FONT_ID);
-  EXPECT_EQ(parser.fontIdForScale(1.04f), UI_FONT_ID);
+  renderer.fontMap.emplace(BUILTIN_READER_FONT_ID, EpdFontFamily(10, nullptr));
+  parser.fontId = BUILTIN_READER_FONT_ID;
+  EXPECT_EQ(parser.fontIdForScale(1.0f), BUILTIN_READER_FONT_ID);
+  EXPECT_EQ(parser.fontIdForScale(2.0f), BUILTIN_READER_FONT_ID);
+  EXPECT_EQ(parser.fontIdForScale(0.5f), BUILTIN_READER_FONT_ID);
+  EXPECT_EQ(parser.fontIdForScale(0.96f), BUILTIN_READER_FONT_ID);
+  EXPECT_EQ(parser.fontIdForScale(1.04f), BUILTIN_READER_FONT_ID);
   parser.fontId = 54321;  // family not registered with the renderer
   EXPECT_EQ(parser.fontIdForScale(2.0f), 54321);
   parser.fontId = 12345;  // SD or vector font: never rescaled
@@ -359,7 +356,7 @@ TEST(FontVariantProvider, NearUnitScalesKeepBaseFontWithoutResolving) {
                                  ++*static_cast<int*>(ctx);
                                  return 42;
                                }};
-  for (const int font : {UI_FONT_ID, 7}) {
+  for (const int font : {BUILTIN_READER_FONT_ID, 7}) {
     for (const float scale : {0.96f, 0.99f, 1.0f, 1.04f}) EXPECT_EQ(provider.resolveFont(font, scale), font);
   }
   EXPECT_EQ(calls, 0);
@@ -368,11 +365,11 @@ TEST(FontVariantProvider, NearUnitScalesKeepBaseFontWithoutResolving) {
 }
 
 TEST_F(ChapterHtmlSlimParserTest, BuiltinFontSelectionDelegatesToInstalledProvider) {
-  parser.fontId = UI_FONT_ID;
+  parser.fontId = BUILTIN_READER_FONT_ID;
   int calls = 0;
   renderer.setFontVariantProvider({&calls, [](void* ctx, const int fontId, const float scale) {
                                      ++*static_cast<int*>(ctx);
-                                     EXPECT_EQ(fontId, UI_FONT_ID);
+                                     EXPECT_EQ(fontId, BUILTIN_READER_FONT_ID);
                                      EXPECT_FLOAT_EQ(scale, 0.8f);
                                      return 42;
                                    }});
@@ -381,7 +378,7 @@ TEST_F(ChapterHtmlSlimParserTest, BuiltinFontSelectionDelegatesToInstalledProvid
 }
 
 TEST_F(ChapterHtmlSlimParserTest, MissingVariantProviderFallsBackToBodyFont) {
-  parser.fontId = UI_FONT_ID;
+  parser.fontId = BUILTIN_READER_FONT_ID;
   EXPECT_EQ(renderer.resolveFontVariant(parser.fontId, 2.0f), 0);
   EXPECT_EQ(parser.fontIdForScale(2.0f), parser.fontId);
   EXPECT_EQ(parser.fontIdForScale(0.96f), parser.fontId);
@@ -411,7 +408,8 @@ TEST_F(ChapterHtmlSlimParserTest, BlockFontScaleInheritsAndUsesHeadingDefaults) 
 }
 
 TEST_F(ChapterHtmlSlimParserTest, PageImageDeserializeRejectsMissingImageBlock) {
-  const auto path = (std::filesystem::temp_directory_path() / "crosspoint-missing-image-cache.bin").string();
+  const ScopedTempDir tempDir;
+  const auto path = (tempDir.path() / "missing-image-cache.bin").string();
   {
     HalFile output;
     ASSERT_TRUE(output.open(path.c_str(), "wb"));
@@ -469,6 +467,30 @@ TEST_F(ChapterHtmlSlimParserTest, HeaderWithHiddenAttributeShouldBeSkipped) {
   ChapterHtmlSlimParser::characterData(&parser, "[HIDDEN]", 8);
 
   ASSERT_EQ(parser.partWordBufferIndex, 0);
+}
+
+TEST_F(ChapterHtmlSlimParserTest, HeadingBlocksAreNotHyphenated) {
+  const XML_Char* noAttributes[] = {nullptr};
+  parser.hyphenationEnabled = true;
+
+  parser.beginParse();
+  ChapterHtmlSlimParser::startElement(&parser, "h2", noAttributes);
+  ChapterHtmlSlimParser::characterData(&parser, "Title ", 6);
+  ASSERT_NE(parser.currentTextBlock, nullptr);
+  EXPECT_FALSE(parser.currentTextBlock->isHyphenationEnabled());
+  // A line break inside the heading starts another block of the same heading.
+  ChapterHtmlSlimParser::startElement(&parser, "br", noAttributes);
+  ChapterHtmlSlimParser::endElement(&parser, "br");
+  ChapterHtmlSlimParser::characterData(&parser, "More ", 5);
+  EXPECT_FALSE(parser.currentTextBlock->isHyphenationEnabled());
+  ChapterHtmlSlimParser::endElement(&parser, "h2");
+
+  ChapterHtmlSlimParser::startElement(&parser, "p", noAttributes);
+  ChapterHtmlSlimParser::characterData(&parser, "Body ", 5);
+  ASSERT_NE(parser.currentTextBlock, nullptr);
+  EXPECT_TRUE(parser.currentTextBlock->isHyphenationEnabled());
+  ChapterHtmlSlimParser::endElement(&parser, "p");
+  parser.abortParse();
 }
 
 TEST_F(ChapterHtmlSlimParserTest, SpanWithHiddenAttributeShouldBeSkipped) {
@@ -883,7 +905,8 @@ TEST_F(ChapterBlockDecorationTest, InheritUsesSemanticParentEmphasisAndRestoresS
 }
 
 TEST_F(ChapterBlockDecorationTest, FontInheritanceUsesWinningCssRuleBeforeInlineOverride) {
-  const auto path = (std::filesystem::temp_directory_path() / "crosspoint-font-inheritance.css").string();
+  const ScopedTempDir tempDir;
+  const auto path = (tempDir.path() / "font-inheritance.css").string();
   {
     HalFile output;
     ASSERT_TRUE(output.open(path.c_str(), "wb"));
@@ -898,7 +921,6 @@ TEST_F(ChapterBlockDecorationTest, FontInheritanceUsesWinningCssRuleBeforeInline
     ASSERT_TRUE(input.open(path.c_str(), "rb"));
     ASSERT_EQ(cssParser.loadFromStream(input), CssParser::ParseResult::Complete);
   }
-  std::filesystem::remove(path);
   open("body", "font-weight:normal;font-style:normal");
   const XML_Char* inherited[] = {"id", "inherited", "class", "inherited", nullptr};
   ChapterHtmlSlimParser::startElement(&parser, "p", inherited);
@@ -1126,7 +1148,8 @@ TEST_F(ChapterBlockDecorationTest, MultiWordSpanStaysText) {
 }
 
 TEST_F(ChapterBlockDecorationTest, FirstLetterRuleCapturesQuoteAndLetter) {
-  const auto cssPath = (std::filesystem::temp_directory_path() / "crosspoint-first-letter.css").string();
+  const ScopedTempDir tempDir;
+  const auto cssPath = (tempDir.path() / "first-letter.css").string();
   {
     HalFile output;
     ASSERT_TRUE(output.open(cssPath.c_str(), "wb"));
@@ -1148,8 +1171,54 @@ TEST_F(ChapterBlockDecorationTest, FirstLetterRuleCapturesQuoteAndLetter) {
   const auto caps = elementsWithTag(TAG_PageDropCap);
   ASSERT_EQ(caps.size(), 1u);
   EXPECT_STREQ(static_cast<const PageDropCap*>(caps[0])->getText(), "\xe2\x80\x9cI");
-  input.close();
-  std::filesystem::remove(cssPath);
+}
+
+// A drop cap draws codepoints one by one; Indic text must shape as a whole word.
+TEST_F(ChapterBlockDecorationTest, IndicFloatedSpanStaysText) {
+  open("p", nullptr);
+  open("span", "float: left; font-size: 3em");
+  text("\xe0\xa6\x95\xe0\xa6\xbf");  // কি: the pre-base vowel sign draws before its consonant
+  close("span");
+  text("\xe0\xa6\x9b\xe0\xa7\x81 " + words(40));  // ছু
+  close("p");
+
+  EXPECT_TRUE(elementsWithTag(TAG_PageDropCap).empty());
+  const auto lines = elementsWithTag(TAG_PageLine);
+  ASSERT_FALSE(lines.empty());
+  EXPECT_EQ(lines[0]->xPos, 0);
+  EXPECT_STREQ(static_cast<const PageLine*>(lines[0])->getBlock()->wordText(0), "\xe0\xa6\x95\xe0\xa6\xbf");
+}
+
+TEST_F(ChapterBlockDecorationTest, IndicFirstLetterRuleKeepsQuoteAndClusterInWord) {
+  const ScopedTempDir tempDir;
+  const auto cssPath = (tempDir.path() / "first-letter-indic.css").string();
+  {
+    HalFile output;
+    ASSERT_TRUE(output.open(cssPath.c_str(), "wb"));
+    const std::string css = "p.opening::first-letter { initial-letter: 2; }";
+    output.write(css.data(), css.size());
+  }
+  HalFile input;
+  ASSERT_TRUE(input.open(cssPath.c_str(), "rb"));
+  ASSERT_EQ(cssParser.loadFromStream(input), CssParser::ParseResult::Complete);
+
+  open("body", nullptr);
+  open("p", nullptr);
+  text("Before here");
+  close("p");
+  const XML_Char* attributes[] = {"class", "opening", nullptr};
+  ChapterHtmlSlimParser::startElement(&parser, "p", attributes);
+  text("\xe2\x80\x9c\xe0\xa6\x95\xe0\xa6\xbf " + words(40));  // “কি
+  close("p");
+
+  EXPECT_TRUE(elementsWithTag(TAG_PageDropCap).empty());
+  const auto lines = elementsWithTag(TAG_PageLine);
+  ASSERT_GE(lines.size(), 2u);
+  const auto& before = *static_cast<const PageLine*>(lines[0])->getBlock();
+  const auto& opening = *static_cast<const PageLine*>(lines[1])->getBlock();
+  EXPECT_STREQ(opening.wordText(0), "\xe2\x80\x9c\xe0\xa6\x95\xe0\xa6\xbf");
+  // The restored quote keeps its own source offset, right after "Before here", not the previous word's.
+  EXPECT_EQ(opening.wordSourceRange(0).start, before.wordSourceRange(before.wordCount() - 1).end);
 }
 
 TEST_F(ChapterBlockDecorationTest, BorderedBlockFramesItsTextAndInsetsIt) {
@@ -1342,8 +1411,8 @@ class ChapterInlineSizeTest : public ChapterBlockDecorationTest {
   void SetUp() override {
     ChapterBlockDecorationTest::SetUp();
     installBuiltinVariants(renderer);
-    renderer.fontMap.emplace(UI_FONT_ID, EpdFontFamily(10, nullptr));
-    parser.fontId = UI_FONT_ID;
+    renderer.fontMap.emplace(BUILTIN_READER_FONT_ID, EpdFontFamily(10, nullptr));
+    parser.fontId = BUILTIN_READER_FONT_ID;
   }
   int firstLineFontId() {
     const auto lines = elementsWithTag(TAG_PageLine);
@@ -1383,7 +1452,7 @@ TEST_F(ChapterInlineSizeTest, ShortSizedHeadingSpanFallsBackToStyledText) {
   ASSERT_EQ(following.wordCount(), 1u);
   EXPECT_STREQ(following.wordText(0), "After");
   EXPECT_EQ(following.wordStyle(0), EpdFontFamily::REGULAR);
-  EXPECT_EQ(following.wordFontId(0, UI_FONT_ID), UI_FONT_ID);
+  EXPECT_EQ(following.wordFontId(0, BUILTIN_READER_FONT_ID), BUILTIN_READER_FONT_ID);
 }
 
 TEST_F(ChapterInlineSizeTest, NestedSpansCompoundTheirSizes) {
@@ -1407,8 +1476,8 @@ TEST_F(ChapterInlineSizeTest, TextAfterTheSpanKeepsBodySize) {
   EXPECT_EQ(firstLineFontId(), 0);
   // The lead words keep their own size inline.
   const auto& block = *static_cast<const PageLine*>(elementsWithTag(TAG_PageLine)[0])->getBlock();
-  EXPECT_EQ(block.wordFontId(0, UI_FONT_ID), UI_FONT_ID);
-  EXPECT_EQ(block.wordFontId(1, UI_FONT_ID), UI_FONT_ID);
+  EXPECT_EQ(block.wordFontId(0, BUILTIN_READER_FONT_ID), BUILTIN_READER_FONT_ID);
+  EXPECT_EQ(block.wordFontId(1, BUILTIN_READER_FONT_ID), BUILTIN_READER_FONT_ID);
 }
 
 TEST_F(ChapterInlineSizeTest, MixedSizesWithinALineSurviveTheCache) {
@@ -1426,11 +1495,12 @@ TEST_F(ChapterInlineSizeTest, MixedSizesWithinALineSurviveTheCache) {
   ASSERT_EQ(lines.size(), 1u);
   const auto& block = *static_cast<const PageLine*>(lines[0])->getBlock();
   ASSERT_EQ(block.wordCount(), 4);
-  EXPECT_EQ(block.wordFontId(0, UI_FONT_ID), UI_FONT_ID);
-  EXPECT_EQ(block.wordFontId(1, UI_FONT_ID), UI_FONT_ID);
-  EXPECT_EQ(block.wordFontId(3, UI_FONT_ID), UI_FONT_ID);
+  EXPECT_EQ(block.wordFontId(0, BUILTIN_READER_FONT_ID), BUILTIN_READER_FONT_ID);
+  EXPECT_EQ(block.wordFontId(1, BUILTIN_READER_FONT_ID), BUILTIN_READER_FONT_ID);
+  EXPECT_EQ(block.wordFontId(3, BUILTIN_READER_FONT_ID), BUILTIN_READER_FONT_ID);
 
-  const auto path = (std::filesystem::temp_directory_path() / "crosspoint-word-fonts.bin").string();
+  const ScopedTempDir tempDir;
+  const auto path = (tempDir.path() / "word-fonts.bin").string();
   {
     HalFile output;
     ASSERT_TRUE(output.open(path.c_str(), "wb"));
@@ -1441,10 +1511,8 @@ TEST_F(ChapterInlineSizeTest, MixedSizesWithinALineSurviveTheCache) {
   const auto cached = TextBlock::deserialize(input);
   ASSERT_NE(cached, nullptr);
   for (uint16_t i = 0; i < block.wordCount(); ++i) {
-    EXPECT_EQ(cached->wordFontId(i, UI_FONT_ID), block.wordFontId(i, UI_FONT_ID));
+    EXPECT_EQ(cached->wordFontId(i, BUILTIN_READER_FONT_ID), block.wordFontId(i, BUILTIN_READER_FONT_ID));
   }
-  input.close();
-  std::filesystem::remove(path);
 }
 
 TEST_F(ChapterBlockDecorationTest, SdAndVectorFontsSizeThroughTheVariantProvider) {
@@ -1469,6 +1537,200 @@ TEST_F(ChapterBlockDecorationTest, SdAndVectorFontsSizeThroughTheVariantProvider
   EXPECT_EQ(body.wordFontId(1, SD_FONT), SD_FONT * 1000 + 80);
 }
 
+TEST_F(ChapterBlockDecorationTest, EmbeddedFamiliesFollowPublisherFontsMode) {
+  const uint32_t body = CssParser::hashFontFamily("Garamond");
+  const uint32_t hand = CssParser::hashFontFamily("Handscript");
+  renderer.embeddedFamilies = {body, hand};
+  constexpr int BODY_FONT = 900100;
+  constexpr int HAND_FONT = 901100;
+  const auto parse = [this] {
+    open("body", "font-family: Garamond, serif");
+    open("p", nullptr);
+    text("Plain ");
+    open("span", "font-family: 'handscript'");
+    text("inked");
+    close("span");
+    close("p");
+    open("p", "font-family: \"Handscript\"");
+    text("Letter");
+    close("p");
+    close("body");
+  };
+
+  parser.setPublisherFonts(PublisherFonts::Accents);
+  parse();
+  auto lines = elementsWithTag(TAG_PageLine);
+  ASSERT_EQ(lines.size(), 2u);
+  const auto& mixed = *static_cast<const PageLine*>(lines[0])->getBlock();
+  EXPECT_EQ(mixed.getBlockStyle().fontId, 0);  // the body family stays in the reader font
+  EXPECT_EQ(mixed.wordFontId(0, BUILTIN_READER_FONT_ID), BUILTIN_READER_FONT_ID);
+  EXPECT_EQ(mixed.wordFontId(1, BUILTIN_READER_FONT_ID), HAND_FONT);
+  EXPECT_EQ(static_cast<const PageLine*>(lines[1])->getBlock()->getBlockStyle().fontId, HAND_FONT);
+
+  pages.clear();
+  parser.beginParse();
+  parser.setPublisherFonts(PublisherFonts::All);
+  parse();
+  lines = elementsWithTag(TAG_PageLine);
+  ASSERT_EQ(lines.size(), 2u);
+  const auto& all = *static_cast<const PageLine*>(lines[0])->getBlock();
+  EXPECT_EQ(all.getBlockStyle().fontId, BODY_FONT);
+  EXPECT_EQ(all.wordFontId(0, BUILTIN_READER_FONT_ID), BODY_FONT);
+  EXPECT_EQ(all.wordFontId(1, BUILTIN_READER_FONT_ID), HAND_FONT);
+
+  pages.clear();
+  parser.beginParse();
+  parser.setPublisherFonts(PublisherFonts::Off);
+  parse();
+  lines = elementsWithTag(TAG_PageLine);
+  ASSERT_EQ(lines.size(), 2u);
+  EXPECT_EQ(static_cast<const PageLine*>(lines[1])->getBlock()->getBlockStyle().fontId, 0);
+}
+
+class PublisherBodyFontTest : public ChapterBlockDecorationTest {
+ protected:
+  std::filesystem::path directory;
+  void SetUp() override {
+    ChapterBlockDecorationTest::SetUp();
+    parser.fontId = BUILTIN_READER_FONT_ID;
+    directory = std::filesystem::temp_directory_path() / "crosspoint_body_font_test" /
+                ::testing::UnitTest::GetInstance()->current_test_info()->name();
+    std::filesystem::create_directories(directory);
+    filepath = (directory / "chapter.xhtml").string();
+    renderer.embeddedFamilies = {CssParser::hashFontFamily("EBGaramond"), CssParser::hashFontFamily("YatraOne"),
+                                 CssParser::hashFontFamily("Roboto")};
+    std::ofstream cssFile(directory / "style.css");
+    cssFile << ".indent, .noindent { font-family: EBGaramond, serif; }"
+               ".date, h1 { font-family: YatraOne, sans-serif; }"
+               ".block { font-family: Roboto, sans-serif; }";
+    cssFile.close();
+    HalFile source;
+    ASSERT_TRUE(Storage.openFileForRead("TST", (directory / "style.css").string(), source));
+    ASSERT_EQ(cssParser.loadFromStream(source), CssParser::ParseResult::Complete);
+  }
+  void TearDown() override {
+    parser.abortParse();
+    std::filesystem::remove_all(directory);
+  }
+  void parse(const std::string& html, PublisherFonts mode = PublisherFonts::Accents) {
+    std::ofstream output(filepath);
+    output << html;
+    output.close();
+    parser.setPublisherFonts(mode);
+    ASSERT_TRUE(parser.parseAndBuildPages());
+  }
+  int fontFor(const char* word) {
+    for (const auto& page : pages) {
+      for (const auto& element : page->elements) {
+        if (element->getTag() != TAG_PageLine) continue;
+        const auto& block = *static_cast<const PageLine*>(element.get())->getBlock();
+        for (uint16_t i = 0; i < block.wordCount(); ++i) {
+          if (strcmp(block.wordText(i), word) == 0) {
+            const int font = block.wordFontId(i, parser.fontId);
+            return font == parser.fontId ? 0 : font;
+          }
+        }
+      }
+    }
+    ADD_FAILURE() << "Missing word: " << word;
+    return -1;
+  }
+};
+
+TEST_F(PublisherBodyFontTest, ParagraphBodyFontDoesNotComeFromLeadingDateOrHeading) {
+  parse(
+      "<html><body><h1>Heading</h1><p class='date'>Date</p>"
+      "<p class='noindent'>Ordinary body paragraph with enough narrative text.</p>"
+      "<p class='indent'>More narrative with an <span class='block'>inline</span> accent.</p>"
+      "<p class='block'>Quotation</p></body></html>");
+  EXPECT_EQ(fontFor("Ordinary"), 0);
+  EXPECT_EQ(fontFor("More"), 0);
+  EXPECT_EQ(fontFor("Heading"), 901200);
+  EXPECT_EQ(fontFor("Date"), 901100);
+  EXPECT_EQ(fontFor("inline"), 902100);
+  EXPECT_EQ(fontFor("Quotation"), 902100);
+}
+
+TEST_F(PublisherBodyFontTest, ExplicitRootFontTakesPriorityOverParagraphUsage) {
+  parse(
+      "<html><body style='font-family: EBGaramond'><p>Body</p>"
+      "<p class='block'>A much longer paragraph in an intentionally different publisher font.</p></body></html>");
+  EXPECT_EQ(fontFor("Body"), 0);
+  EXPECT_EQ(fontFor("longer"), 902100);
+}
+
+TEST_F(PublisherBodyFontTest, HiddenAndDecorativeTextDoesNotChooseTheBodyFont) {
+  const std::string decoration(512, 'X');
+  parse(
+      "<html><head><title>Title</title></head><body>"
+      "<p class='date' hidden='hidden'>" +
+      decoration +
+      "</p>"
+      "<blockquote><p class='block'>" +
+      decoration +
+      "</p></blockquote>"
+      "<p class='date' style='text-align: center'>" +
+      decoration +
+      "</p>"
+      "<p class='noindent'>Ordinary prose</p></body></html>");
+  EXPECT_EQ(parser.bodyFontFamily, CssParser::hashFontFamily("EBGaramond"));
+  EXPECT_EQ(fontFor("Ordinary"), 0);
+}
+
+TEST_F(PublisherBodyFontTest, InlineAccentDoesNotChooseTheParagraphFamily) {
+  parse(
+      "<html><body><p class='indent'>"
+      "<span class='block'>A much longer inline accent</span> Body</p></body></html>");
+  EXPECT_EQ(parser.bodyFontFamily, CssParser::hashFontFamily("EBGaramond"));
+  EXPECT_EQ(fontFor("Body"), 0);
+  EXPECT_EQ(fontFor("accent"), 902100);
+}
+
+TEST_F(PublisherBodyFontTest, ReaderFontParagraphsKeepMinorityEmbeddedAccents) {
+  parse(
+      "<html><body><p>Ordinary prose stays in the selected reader font without an embedded family.</p>"
+      "<p class='block'>Quotation</p></body></html>");
+  EXPECT_EQ(fontFor("Ordinary"), 0);
+  EXPECT_EQ(fontFor("Quotation"), 902100);
+}
+
+TEST_F(PublisherBodyFontTest, NoOrdinaryParagraphsPreservesDecorativeFonts) {
+  parse("<html><body><h1>Heading</h1><p class='date' style='text-align: center'>Dedication</p></body></html>");
+  EXPECT_EQ(fontFor("Heading"), 901200);
+  EXPECT_EQ(fontFor("Dedication"), 901100);
+}
+
+TEST_F(PublisherBodyFontTest, AllTextStillUsesThePublisherBodyFont) {
+  parse("<html><body><p class='indent'>Body</p></body></html>", PublisherFonts::All);
+  EXPECT_EQ(fontFor("Body"), 900100);
+  EXPECT_FALSE(parser.bodyFontDetected);
+}
+
+TEST_F(PublisherBodyFontTest, OffStillUsesTheReaderFontEverywhere) {
+  parse("<html><body><h1>Heading</h1><p class='indent'>Body</p></body></html>", PublisherFonts::Off);
+  EXPECT_EQ(fontFor("Body"), 0);
+  EXPECT_EQ(fontFor("Heading"), 0);
+  EXPECT_FALSE(parser.bodyFontDetected);
+}
+
+TEST_F(PublisherBodyFontTest, InheritedContainerFamilyKeepsInlineAccent) {
+  parse(
+      "<html><body><div style='font-family: EBGaramond'><p>Body narrative</p>"
+      "<p><span style='font-family: YatraOne'>Accent</span></p></div></body></html>");
+  EXPECT_EQ(fontFor("Body"), 0);
+  EXPECT_EQ(fontFor("Accent"), 901100);
+}
+
+TEST_F(PublisherBodyFontTest, LongChapterRewindsBeforeLayingOutTheFirstPage) {
+  std::string html = "<html><body><p class='indent'>First ";
+  for (size_t i = 0; i < 12000; ++i) html += "prose ";
+  html += "</p><p class='block'>Lastaccent</p></body></html>";
+  parse(html);
+  EXPECT_EQ(parser.bodyFontFamily, CssParser::hashFontFamily("EBGaramond"));
+  EXPECT_EQ(fontFor("First"), 0);
+  EXPECT_EQ(fontFor("Lastaccent"), 902100);
+}
+
 TEST_F(ChapterBlockDecorationTest, UnloadableVariantFallsBackToSectionFont) {
   EXPECT_EQ(TextBlock::renderFontId(renderer, 12345, 7), 7);
   installSyntheticVariants(renderer);
@@ -1480,13 +1742,14 @@ TEST_F(ChapterInlineSizeTest, UniformLinesCarryNoWordFonts) {
   text("Plain text only");
   close("p");
   const auto& block = *static_cast<const PageLine*>(elementsWithTag(TAG_PageLine)[0])->getBlock();
-  EXPECT_EQ(block.wordFontId(1, UI_FONT_ID), UI_FONT_ID);
-  EXPECT_EQ(block.extraAscent(renderer, UI_FONT_ID), 0);
+  EXPECT_EQ(block.wordFontId(1, BUILTIN_READER_FONT_ID), BUILTIN_READER_FONT_ID);
+  EXPECT_EQ(block.extraAscent(renderer, BUILTIN_READER_FONT_ID), 0);
 }
 
 TEST_F(ChapterTableBorderTest, ScansColumnWidthsFromMarkup) {
   renderer.sdFont = true;
-  const auto path = (std::filesystem::temp_directory_path() / "crosspoint-table-scan.xhtml").string();
+  const ScopedTempDir tempDir;
+  const auto path = (tempDir.path() / "table-scan.xhtml").string();
   {
     HalFile output;
     ASSERT_TRUE(output.open(path.c_str(), "wb"));
@@ -1515,8 +1778,6 @@ TEST_F(ChapterTableBorderTest, ScansColumnWidthsFromMarkup) {
   parser.planTableColumns(measure);
   EXPECT_EQ(parser.tableColumnWidths[0], 16 + 8);
   EXPECT_EQ(parser.tableColumnWidths[1], 200 - 24);
-  input.close();
-  std::filesystem::remove(path);
 }
 
 TEST_F(ChapterTableBorderTest, RowsUsePlannedColumnWidths) {
@@ -1804,9 +2065,9 @@ TEST_F(ChapterInlineSizeTest, NestedRemResetKeepsItsFontInsideSizedParagraph) {
   ASSERT_EQ(lines.size(), 1u);
   const auto& block = *static_cast<const PageLine*>(lines[0])->getBlock();
   ASSERT_EQ(block.wordCount(), 3u);
-  EXPECT_EQ(block.wordFontId(0, parser.fontId), UI_FONT_ID);
-  EXPECT_EQ(block.wordFontId(1, parser.fontId), UI_FONT_ID);
-  EXPECT_EQ(block.wordFontId(2, parser.fontId), UI_FONT_ID);
+  EXPECT_EQ(block.wordFontId(0, parser.fontId), BUILTIN_READER_FONT_ID);
+  EXPECT_EQ(block.wordFontId(1, parser.fontId), BUILTIN_READER_FONT_ID);
+  EXPECT_EQ(block.wordFontId(2, parser.fontId), BUILTIN_READER_FONT_ID);
 }
 
 TEST_F(ChapterInlineSizeTest, DescendantFontSizeResolvesAfterAncestorSize) {
@@ -1823,10 +2084,10 @@ TEST_F(ChapterInlineSizeTest, DescendantFontSizeResolvesAfterAncestorSize) {
   close("body");
   const auto lines = elementsWithTag(TAG_PageLine);
   ASSERT_EQ(lines.size(), 3u);
-  const int expected[] = {UI_FONT_ID, UI_FONT_ID, UI_FONT_ID};
+  const int expected[] = {BUILTIN_READER_FONT_ID, BUILTIN_READER_FONT_ID, BUILTIN_READER_FONT_ID};
   for (size_t i = 0; i < lines.size(); ++i) {
     const auto& block = *static_cast<const PageLine*>(lines[i])->getBlock();
-    EXPECT_EQ(block.wordFontId(0, UI_FONT_ID), expected[i]);
+    EXPECT_EQ(block.wordFontId(0, BUILTIN_READER_FONT_ID), expected[i]);
   }
 }
 
@@ -1844,14 +2105,14 @@ TEST_F(ChapterInlineSizeTest, SpecializedInlineTagsKeepTheirFontSize) {
     const auto lines = elementsWithTag(TAG_PageLine);
     const auto& block = *static_cast<const PageLine*>(lines.back())->getBlock();
     ASSERT_EQ(block.wordCount(), 3u);
-    EXPECT_EQ(block.wordFontId(1, UI_FONT_ID), UI_FONT_ID);
-    EXPECT_EQ(block.wordFontId(2, UI_FONT_ID), UI_FONT_ID);
+    EXPECT_EQ(block.wordFontId(1, BUILTIN_READER_FONT_ID), BUILTIN_READER_FONT_ID);
+    EXPECT_EQ(block.wordFontId(2, BUILTIN_READER_FONT_ID), BUILTIN_READER_FONT_ID);
   }
 }
 
 TEST_F(ChapterInlineSizeTest, EnlargedGridCellsReserveTheirHeightAcrossPages) {
-  renderer.fontLineHeights[UI_FONT_ID] = 32;
-  renderer.fontAscenders[UI_FONT_ID] = 24;
+  renderer.fontLineHeights[BUILTIN_READER_FONT_ID] = 32;
+  renderer.fontAscenders[BUILTIN_READER_FONT_ID] = 24;
   parser.viewportHeight = 80;
   open("table", nullptr);
   for (const bool inlineSize : {false, true}) {
@@ -1886,7 +2147,7 @@ TEST_F(ChapterInlineSizeTest, EnlargedGridCellsReserveTheirHeightAcrossPages) {
       bottomByColumn[line.xPos] = line.yPos + height;
       if (line.xPos < parser.viewportWidth / 2) {
         ++enlargedLines;
-        EXPECT_EQ(block.wordFontId(0, parser.fontId), UI_FONT_ID);
+        EXPECT_EQ(block.wordFontId(0, parser.fontId), BUILTIN_READER_FONT_ID);
       }
     }
   }
@@ -1910,8 +2171,8 @@ TEST_F(ChapterInlineSizeTest, GridCellsResolveBlockAndWordFonts) {
   ASSERT_EQ(lines.size(), 2u);
   const auto& large = *static_cast<const PageLine*>(lines[0])->getBlock();
   const auto& small = *static_cast<const PageLine*>(lines[1])->getBlock();
-  EXPECT_EQ(large.wordFontId(0, UI_FONT_ID), UI_FONT_ID);
-  EXPECT_EQ(small.wordFontId(0, UI_FONT_ID), UI_FONT_ID);
+  EXPECT_EQ(large.wordFontId(0, BUILTIN_READER_FONT_ID), BUILTIN_READER_FONT_ID);
+  EXPECT_EQ(small.wordFontId(0, BUILTIN_READER_FONT_ID), BUILTIN_READER_FONT_ID);
 }
 
 TEST_F(ChapterBlockDecorationTest, BorderScopeExcludesPrecedingParentText) {
@@ -1950,6 +2211,50 @@ TEST_F(ChapterBlockDecorationTest, AncestorShadePaintsBeforeNestedBorders) {
     EXPECT_NE(std::find(renderer.boxPaints.begin(), renderer.boxPaints.end(), 'b'), renderer.boxPaints.end());
     const auto firstBorder = std::find(renderer.boxPaints.begin(), renderer.boxPaints.end(), 'b');
     EXPECT_EQ(std::find(firstBorder, renderer.boxPaints.end(), 's'), renderer.boxPaints.end());
+  }
+}
+
+TEST_F(ChapterBlockDecorationTest, ShadedBoxSkipsGrayscaleOverlay) {
+  open("div", "background: #efeff0");
+  text("Inside");
+  close("div");
+  ASSERT_NE(parser.currentPage, nullptr);
+
+  for (const auto plane : {GfxRenderer::GRAYSCALE_LSB, GfxRenderer::GRAYSCALE_MSB}) {
+    SCOPED_TRACE(plane);
+    renderer.renderMode = plane;
+    renderer.absoluteGrayPlanes = false;
+    renderer.boxPaints.clear();
+    parser.currentPage->render(renderer, 0, 0, 0);
+    EXPECT_TRUE(renderer.boxPaints.empty());
+
+    renderer.absoluteGrayPlanes = true;
+    renderer.boxPaints.clear();
+    parser.currentPage->render(renderer, 0, 0, 0);
+    EXPECT_EQ(renderer.boxPaints, "s");
+  }
+}
+
+TEST_F(ChapterBlockDecorationTest, UnshadedTextAndBordersRenderInEveryPass) {
+  open("p", nullptr);
+  text("Plain");
+  close("p");
+  open("div", "background: #fff; border: 1px solid");
+  text("Bordered");
+  close("div");
+  ASSERT_NE(parser.currentPage, nullptr);
+
+  for (const auto mode : {GfxRenderer::BW, GfxRenderer::GRAYSCALE_LSB, GfxRenderer::GRAYSCALE_MSB}) {
+    SCOPED_TRACE(mode);
+    renderer.renderMode = mode;
+    renderer.boxPaints.clear();
+    renderer.textDraws.clear();
+    parser.currentPage->render(renderer, 0, 0, 0);
+
+    EXPECT_EQ(renderer.boxPaints, "bbbb");
+    ASSERT_EQ(renderer.textDraws.size(), 2u);
+    EXPECT_EQ(renderer.textDraws[0].text, "Plain");
+    EXPECT_EQ(renderer.textDraws[1].text, "Bordered");
   }
 }
 
@@ -2095,7 +2400,8 @@ TEST(TextSpacingLayout, CachedPageRestoresSpacing) {
   ParsedText text(false, false, style);
   text.addWord("一二三", EpdFontFamily::REGULAR);
   text.addWord("四五", EpdFontFamily::REGULAR);
-  const auto path = (std::filesystem::temp_directory_path() / "crosspoint-text-spacing.bin").string();
+  const ScopedTempDir tempDir;
+  const auto path = (tempDir.path() / "text-spacing.bin").string();
   unsigned lines = 0;
   text.layoutAndExtractLines(
       renderer, 0, 200,
@@ -2125,7 +2431,6 @@ TEST(TextSpacingLayout, CachedPageRestoresSpacing) {
       },
       true, -2, 50);
   EXPECT_EQ(lines, 1u);
-  std::filesystem::remove(path);
 }
 
 TEST_F(ChapterHtmlSlimParserTest, ParserAppliesTextSpacingToParagraphs) {
@@ -2324,7 +2629,8 @@ TEST_F(ChapterHtmlSlimParserTest, BionicProtectsInlineWordsAndRubyAcrossPages) {
       "<html><body><p>reading 가나다라</p><p>rea<i>ding</i> "
       "<ruby>한글<rt>hangul</rt></ruby> <b>author</b> "
       "<u>underlined</u> <span style='font-size:150%'>sized</span></p></body></html>";
-  filepath = (std::filesystem::temp_directory_path() / "crosstwins-bionic-parser.xhtml").string();
+  const ScopedTempDir tempDir;
+  filepath = (tempDir.path() / "crosstwins-bionic-parser.xhtml").string();
   {
     HalFile file;
     ASSERT_TRUE(file.open(filepath.c_str(), "wb"));
@@ -2376,7 +2682,8 @@ TEST_F(ChapterHtmlSlimParserTest, BionicTxtLineEndWordsShareEpubEmphasis) {
     }
   } out;
   ASSERT_TRUE(TxtToHtml::stream("bionic.txt", "reading\n가나다라\n", out));
-  filepath = (std::filesystem::temp_directory_path() / "crosstwins-bionic-txt.xhtml").string();
+  const ScopedTempDir tempDir;
+  filepath = (tempDir.path() / "crosstwins-bionic-txt.xhtml").string();
   {
     HalFile file;
     ASSERT_TRUE(file.open(filepath.c_str(), "wb"));
@@ -2395,4 +2702,21 @@ TEST_F(ChapterHtmlSlimParserTest, BionicTxtLineEndWordsShareEpubEmphasis) {
     if (draw.style & EpdFontFamily::BOLD) bold += draw.text;
   EXPECT_EQ(bold, "re가");
   std::filesystem::remove(filepath);
+}
+
+TEST(TextSpacingLayout, UsesShapingMemoOnlyForParagraphsWithIndicText) {
+  GfxRenderer renderer;
+  for (const char* word : {"office", "שָׁלוֹם", "कि", "漢कि"}) {
+    ParsedText text;
+    text.addWord(word, EpdFontFamily::REGULAR);
+    const unsigned before = GfxRenderer::shapingMemoStarts;
+    unsigned lines = 0;
+    text.layoutAndExtractLines(renderer, 0, 200, [&](std::unique_ptr<TextBlock> block, auto) {
+      EXPECT_TRUE(block->valid());
+      ++lines;
+    });
+    EXPECT_GT(lines, 0u);
+    const bool indic = std::strstr(word, "कि") != nullptr;
+    EXPECT_EQ(GfxRenderer::shapingMemoStarts - before, indic ? 1u : 0u) << word;
+  }
 }

@@ -105,6 +105,7 @@ class FontDownloadActivity final : public UiListActivity {
   size_t currentFileTotal_ = 0;
   size_t fileProgress_ = 0;
   size_t fileTotal_ = 0;
+  unsigned long lastProgressRepaintMs_ = 0;
   int downloadingFamilyIndex_ = 0;
   std::string errorMessage_;
   bool cancelRequested_ = false;
@@ -141,6 +142,8 @@ class FontDownloadActivity final : public UiListActivity {
   // Returns false if the string does not fit the arena reserved for the manifest.
   bool internString(const char* text, StrRef& outRef);
   void clearManifest();
+  bool fontsSuspended_ = false;
+  void suspendFontsForMutation(const char* familyName);
   void downloadFamily(ManifestFamily& family);
   void downloadAll();
   void updateAll();

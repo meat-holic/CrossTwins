@@ -32,6 +32,7 @@ BookProgressSnapshot loadBookProgressSnapshot(const std::string& path, const boo
     if (fileSize != 4 && fileSize != 6 && fileSize != 10) return snapshot;
     const int size = file.read(data, sizeof(data));
     if (size != static_cast<int>(fileSize)) return snapshot;
+    file.close();
     const int spine = data[0] | (data[1] << 8);
     const int page = data[2] | (data[3] << 8);
     const int total = size >= 6 ? data[4] | (data[5] << 8) : 0;
@@ -46,10 +47,11 @@ BookProgressSnapshot loadBookProgressSnapshot(const std::string& path, const boo
       LOG_ERR("HOME", "OOM: XTC progress metadata");
       return snapshot;
     }
-    if (!xtc->load()) return snapshot;
     HalFile file;
     if (!Storage.openFileForRead("HOME", xtc->getCachePath() + "/progress.bin", file) || file.read(data, 4) != 4)
       return snapshot;
+    file.close();
+    if (!xtc->load()) return snapshot;
     const uint32_t page = readLe32(data);
     if (xtc->getPageCount() == 0) return snapshot;
     if (page >= xtc->getPageCount()) {

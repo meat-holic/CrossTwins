@@ -1,5 +1,6 @@
 #pragma once
 #include <I18n.h>
+#include <VectorFontSupport.h>
 
 #include <functional>
 #include <span>
@@ -23,6 +24,7 @@ enum class SettingAction {
   Network,
   Bluetooth,
   ClearCache,
+  RefreshLibrary,
   CheckForUpdates,
   SdFirmwareUpdate,
   Language,
@@ -30,7 +32,12 @@ enum class SettingAction {
   TextSettings,
   Plugins,
   KeyboardLayouts,
+  UiFont,
   HomeButton,
+  ControlsPower,
+  ControlsFront,
+  ControlsSide,
+  ControlsTouch,
   About,
   SlideshowInterval,
   MinimalMenuAlignment,
@@ -185,16 +192,20 @@ struct SettingInfo {
   }
 };
 
+enum class ControlsGroup : uint8_t { Root, Power, Front, Side, Touch };
+
 // The rows of one SettingsSection; activating a row toggles/cycles it, opens
 // its option popup, or launches its sub-screen.
 class SettingsActivity final : public UiListActivity {
   const SettingsSection section;
+  const ControlsGroup controlsGroup;
   std::vector<SettingInfo> settings;
 
   bool preserveQuickResumeTimeoutOn = false;
   bool quickResumeTimeoutAutoEnabled = false;
 
   OptionPopup optionPopup;
+  bool redrawFontPopupBackground = false;
 
   // Row structure (label/actionValue), rebuilt only when the setting list
   // changes; rowValues_ holds the live value text, refreshed every
@@ -219,7 +230,8 @@ class SettingsActivity final : public UiListActivity {
   void drawFooter() override;
 
  public:
-  SettingsActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, SettingsSection section);
+  SettingsActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, SettingsSection section,
+                   ControlsGroup controlsGroup = ControlsGroup::Root);
   void onEnter() override;
   void render(RenderLock&& lock) override;
 };

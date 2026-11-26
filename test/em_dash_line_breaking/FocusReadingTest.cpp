@@ -163,8 +163,7 @@ TEST(BionicReading, EnglishAuthorStylesAndInlineFragmentsAreProtected) {
     text.addWord("reading", style, style == EpdFontFamily::UNDERLINE);
     text.layoutAndExtractLines(renderer, 0, 2000, [&](auto line, auto) { line->render(renderer, 0, 0, 0); });
     ASSERT_EQ(renderer.textDraws.size(), 1u);
-    EXPECT_EQ(renderer.textDraws.front().style,
-              style == EpdFontFamily::UNDERLINE ? EpdFontFamily::UNDERLINE : style);
+    EXPECT_EQ(renderer.textDraws.front().style, style == EpdFontFamily::UNDERLINE ? EpdFontFamily::UNDERLINE : style);
   }
 
   GfxRenderer renderer;

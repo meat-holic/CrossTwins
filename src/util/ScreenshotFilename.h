@@ -60,8 +60,8 @@ inline bool increment(uint64_t& number) {
 
 inline bool formatPath(const char* directory, const uint64_t number, char* path, const size_t pathSize) {
   if (directory == nullptr || directory[0] == '\0' || number == 0 || path == nullptr || pathSize == 0) return false;
-  const int length = std::snprintf(path, pathSize, "%s/screenshot_%05llu.bmp", directory,
-                                   static_cast<unsigned long long>(number));
+  const int length =
+      std::snprintf(path, pathSize, "%s/screenshot_%05llu.bmp", directory, static_cast<unsigned long long>(number));
   return length >= 0 && static_cast<size_t>(length) < pathSize;
 }
 

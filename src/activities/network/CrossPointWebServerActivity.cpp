@@ -74,6 +74,7 @@ void CrossPointWebServerActivity::onEnter() {
   // demand — release them up front instead of aborting in startWebServer()
   // when the heap comes up short (observed on X3 with a Korean SD font).
   if (auto* fcm = renderer.getFontCacheManager()) {
+    RenderLock lock;
     fcm->releaseSdFontCaches();
     LOG_DBG("WEBACT", "Free heap after SD font cache release: %d bytes", ESP.getFreeHeap());
   }
@@ -113,6 +114,7 @@ void CrossPointWebServerActivity::onExit() {
   LOG_DBG("WEBACT", "Free heap at onExit start: %d bytes", ESP.getFreeHeap());
 
   state = WebServerActivityState::SHUTTING_DOWN;
+  webServer.reset();
   stopDnsServer();
   MDNS.end();
 
@@ -150,12 +152,25 @@ void CrossPointWebServerActivity::onNetworkModeSelected(const NetworkMode mode) 
     modeName = "Connect to Calibre";
   } else if (mode == NetworkMode::CREATE_HOTSPOT) {
     modeName = "Create Hotspot";
+  } else if (mode == NetworkMode::OPDS_BROWSER) {
+    modeName = "OPDS Browser";
 #if FREEINK_CAP_USB_MSC
   } else if (mode == NetworkMode::USB_DRIVE) {
     modeName = "USB Drive";
 #endif
   }
   LOG_DBG("WEBACT", "Network mode selected: %s", modeName);
+
+  // The OPDS browser joins Wi-Fi itself. Wi-Fi is still on if the user backed
+  // out of Join Network; turn it off so onExit does not restart to Home.
+  if (mode == NetworkMode::OPDS_BROWSER) {
+    if (WiFi.getMode() != WIFI_MODE_NULL) {
+      WiFi.disconnect(false);
+      WiFi.mode(WIFI_OFF);
+    }
+    activityManager.goToBrowser();
+    return;
+  }
 
 #if FREEINK_CAP_USB_MSC
   if (mode == NetworkMode::USB_DRIVE) {
@@ -291,14 +306,6 @@ void CrossPointWebServerActivity::startAccessPoint() {
 void CrossPointWebServerActivity::startWebServer() {
   LOG_DBG("WEBACT", "Starting web server...");
 
-  // Repeat the release right before the allocation: the WiFi selection screen
-  // rendered since onEnter(), and a CJK SSID repopulates the SD-font caches.
-  if (auto* fcm = renderer.getFontCacheManager()) {
-    LOG_DBG("WEBACT", "Free heap before SD font cache release: %d bytes", ESP.getFreeHeap());
-    fcm->releaseSdFontCaches();
-    LOG_DBG("WEBACT", "Free heap before server alloc: %d bytes", ESP.getFreeHeap());
-  }
-
   // Create the web server instance
   webServer.reset(new CrossPointWebServer());
   // An upload holds loop() inside handleClient(), so input is sampled on each received chunk instead. On a slow
@@ -313,7 +320,7 @@ void CrossPointWebServerActivity::startWebServer() {
                      mappedInput.wasPressed(MappedInputManager::Button::Back) || mappedInput.wasHomeGesture();
     return leaveRequested;
   });
-  webServer->begin();
+  webServer->begin(renderer);
 
   if (webServer->isRunning()) {
     state = WebServerActivityState::SERVER_RUNNING;
@@ -468,11 +475,6 @@ void CrossPointWebServerActivity::render(RenderLock&&) {
 void CrossPointWebServerActivity::renderServerRunning() const {
   const auto& metrics = UITheme::getInstance().getMetrics();
   const auto pageWidth = renderer.getScreenWidth();
-
-  GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight},
-                 isApMode ? tr(STR_HOTSPOT_MODE) : tr(STR_FILE_TRANSFER), nullptr);
-  GUI.drawSubHeader(renderer, Rect{0, metrics.topPadding + metrics.headerHeight, pageWidth, metrics.tabBarHeight},
-                    connectedSSID.c_str());
 
   if (!isApMode) {
     renderWifiIndicator(metrics.topPadding + metrics.headerHeight);
