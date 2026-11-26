@@ -168,7 +168,7 @@ void RoundedRaffTheme::drawButtonMenuWithStyle(GfxRenderer& renderer, Rect rect,
   drawScrollBar(renderer, rect, buttonCount, pageStartIndex, pageItems);
 }
 
-void RoundedRaffTheme::drawButtonMenuRowWithStyle(GfxRenderer& renderer, const Rect rect, const int index,
+void RoundedRaffTheme::drawButtonMenuRowWithStyle(const GfxRenderer& renderer, const Rect rect, const int index,
                                                   const int pageStartIndex, const bool selected, const char* label,
                                                   const home_menu::Alignment alignment,
                                                   const home_menu::Appearance appearance) const {

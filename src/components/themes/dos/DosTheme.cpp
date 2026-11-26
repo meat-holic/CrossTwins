@@ -71,32 +71,32 @@ void cacheSysInfoLines(const GfxRenderer& renderer, const size_t freeHeapBytes, 
 
   const int contentX = std::max(1, renderer.getScreenWidth() * 60 / 1000);
   const int availableWidth = std::max(0, renderer.getScreenWidth() - 2 * contentX);
-  DosSysInfoDisplay& display = dosSysInfoDisplay;
+  DosSysInfoDisplay& cached = dosSysInfoDisplay;
   int memoryLineCount = 0;
   int cpuLineCount = 0;
 
-  std::snprintf(display.memoryLines[0], sizeof(display.memoryLines[0]), "%s  %s  %s", freeLabel, maxLabel,
+  std::snprintf(cached.memoryLines[0], sizeof(cached.memoryLines[0]), "%s  %s  %s", freeLabel, maxLabel,
                 temperatureLabel);
-  if (renderer.getTextWidth(UI_10_FONT_ID, display.memoryLines[0]) <= availableWidth) {
+  if (renderer.getTextWidth(UI_10_FONT_ID, cached.memoryLines[0]) <= availableWidth) {
     memoryLineCount = 1;
   } else {
-    std::snprintf(display.memoryLines[0], sizeof(display.memoryLines[0]), "%s  %s", freeLabel, maxLabel);
-    if (renderer.getTextWidth(UI_10_FONT_ID, display.memoryLines[0]) <= availableWidth) {
+    std::snprintf(cached.memoryLines[0], sizeof(cached.memoryLines[0]), "%s  %s", freeLabel, maxLabel);
+    if (renderer.getTextWidth(UI_10_FONT_ID, cached.memoryLines[0]) <= availableWidth) {
       memoryLineCount = 1;
-      std::snprintf(display.memoryLines[memoryLineCount++], sizeof(display.memoryLines[0]), "%s", temperatureLabel);
+      std::snprintf(cached.memoryLines[memoryLineCount++], sizeof(cached.memoryLines[0]), "%s", temperatureLabel);
     } else {
-      std::snprintf(display.memoryLines[memoryLineCount++], sizeof(display.memoryLines[0]), "%s", freeLabel);
-      std::snprintf(display.memoryLines[memoryLineCount++], sizeof(display.memoryLines[0]), "%s", maxLabel);
-      std::snprintf(display.memoryLines[memoryLineCount++], sizeof(display.memoryLines[0]), "%s", temperatureLabel);
+      std::snprintf(cached.memoryLines[memoryLineCount++], sizeof(cached.memoryLines[0]), "%s", freeLabel);
+      std::snprintf(cached.memoryLines[memoryLineCount++], sizeof(cached.memoryLines[0]), "%s", maxLabel);
+      std::snprintf(cached.memoryLines[memoryLineCount++], sizeof(cached.memoryLines[0]), "%s", temperatureLabel);
     }
   }
 
-  std::snprintf(display.cpuLines[0], sizeof(display.cpuLines[0]), "%s  %s", cpuLabel, uptimeLabel);
-  if (renderer.getTextWidth(UI_10_FONT_ID, display.cpuLines[0]) <= availableWidth) {
+  std::snprintf(cached.cpuLines[0], sizeof(cached.cpuLines[0]), "%s  %s", cpuLabel, uptimeLabel);
+  if (renderer.getTextWidth(UI_10_FONT_ID, cached.cpuLines[0]) <= availableWidth) {
     cpuLineCount = 1;
   } else {
-    std::snprintf(display.cpuLines[cpuLineCount++], sizeof(display.cpuLines[0]), "%s", cpuLabel);
-    std::snprintf(display.cpuLines[cpuLineCount++], sizeof(display.cpuLines[0]), "%s", uptimeLabel);
+    std::snprintf(cached.cpuLines[cpuLineCount++], sizeof(cached.cpuLines[0]), "%s", cpuLabel);
+    std::snprintf(cached.cpuLines[cpuLineCount++], sizeof(cached.cpuLines[0]), "%s", uptimeLabel);
   }
 
   const uint32_t rowCounts = static_cast<uint32_t>(memoryLineCount) | (static_cast<uint32_t>(cpuLineCount) << 2U);

@@ -507,9 +507,8 @@ void HomeActivity::loop() {
                                               ? MinimalTheme::homeLayout(renderer, renderedMenuCount)
                                               : MinimalHomeLayout{Rect(0, 0, 0, 0), Rect(0, 0, 0, 0), Rect(0, 0, 0, 0)};
   const int coverColumnCount = std::max(1, metrics.homeRecentBooksCount);
-  const int recentCount = dosTheme       ? std::min(static_cast<int>(recentBooks.size()), dosLayout.recentBookCount)
-                          : minimalTheme ? std::min(static_cast<int>(recentBooks.size()), coverColumnCount)
-                                         : std::min(static_cast<int>(recentBooks.size()), coverColumnCount);
+  const int recentLimit = dosTheme ? dosLayout.recentBookCount : coverColumnCount;
+  const int recentCount = std::min(static_cast<int>(recentBooks.size()), recentLimit);
   const int coverColumnWidth = (content.width - 2 * metrics.contentSidePadding) / coverColumnCount;
   int touchedBook = -1;
   const auto coverTouch =

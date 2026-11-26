@@ -236,22 +236,30 @@ void StatusBarSettingsActivity::render(RenderLock&&) {
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_TOGGLE), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
-  const char* title = "";
-  char memoryTitle[status_bar_memory::kTitleBufferSize];
-  if (SETTINGS.statusBarTitle == CrossPointSettings::STATUS_BAR_TITLE::BOOK_TITLE) {
-    title = tr(STR_EXAMPLE_BOOK);
-  } else if (SETTINGS.statusBarTitle == CrossPointSettings::STATUS_BAR_TITLE::CHAPTER_TITLE) {
-    title = tr(STR_EXAMPLE_CHAPTER);
-  } else if (SETTINGS.statusBarTitle == CrossPointSettings::STATUS_BAR_TITLE::MEMORY_WATCH) {
-    const auto heap = HalMemory::getByteAddressableHeap();
-    title = status_bar_memory::formatTitle(memoryTitle, sizeof(memoryTitle), heap.freeBytes, heap.largestBlockBytes,
-                                           tr(STR_MEMORY_WATCH_FORMAT), tr(STR_MEMORY_WATCH_UNAVAILABLE))
-                ? memoryTitle
-                : tr(STR_MEMORY_WATCH_UNAVAILABLE);
-  }
-
   // Anchor the preview as a footer directly above the button hints.
-  GUI.drawStatusBar(renderer, 75, 8, 32, title, metrics.buttonHintsHeight, 0, false);
+  const auto drawPreview = [&](const char* title) {
+    GUI.drawStatusBar(renderer, 75, 8, 32, title, metrics.buttonHintsHeight, 0, false);
+  };
+  switch (SETTINGS.statusBarTitle) {
+    case CrossPointSettings::STATUS_BAR_TITLE::BOOK_TITLE:
+      drawPreview(tr(STR_EXAMPLE_BOOK));
+      break;
+    case CrossPointSettings::STATUS_BAR_TITLE::CHAPTER_TITLE:
+      drawPreview(tr(STR_EXAMPLE_CHAPTER));
+      break;
+    case CrossPointSettings::STATUS_BAR_TITLE::MEMORY_WATCH: {
+      char memoryTitle[status_bar_memory::kTitleBufferSize];
+      const auto heap = HalMemory::getByteAddressableHeap();
+      const bool formatted =
+          status_bar_memory::formatTitle(memoryTitle, sizeof(memoryTitle), heap.freeBytes, heap.largestBlockBytes,
+                                         tr(STR_MEMORY_WATCH_FORMAT), tr(STR_MEMORY_WATCH_UNAVAILABLE));
+      drawPreview(formatted ? memoryTitle : tr(STR_MEMORY_WATCH_UNAVAILABLE));
+      break;
+    }
+    default:
+      drawPreview("");
+      break;
+  }
 
   renderer.drawCenteredText(UI_10_FONT_ID,
                             renderer.getScreenHeight() - UITheme::getInstance().getStatusBarHeight() -

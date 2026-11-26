@@ -95,7 +95,7 @@ class RoundedRaffTheme : public BaseTheme {
   void drawButtonMenuWithStyle(GfxRenderer& renderer, Rect rect, int buttonCount, int selectedIndex,
                                const std::function<std::string(int index)>& buttonLabel, home_menu::Alignment alignment,
                                home_menu::Appearance appearance) const;
-  void drawButtonMenuRowWithStyle(GfxRenderer& renderer, Rect rect, int index, int pageStartIndex, bool selected,
+  void drawButtonMenuRowWithStyle(const GfxRenderer& renderer, Rect rect, int index, int pageStartIndex, bool selected,
                                   const char* label, home_menu::Alignment alignment,
                                   home_menu::Appearance appearance) const;
 
